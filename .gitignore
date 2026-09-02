@@ -1,0 +1,23 @@
+# ROS 2 / colcon
+build/
+install/
+log/
+
+# C++
+*.o
+*.so
+*.a
+compile_commands.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store

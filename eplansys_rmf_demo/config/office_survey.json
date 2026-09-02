@@ -1,0 +1,30 @@
+{
+  "agents": {
+    "scout": {"fleet": "tinyRobot", "robot": "tinyRobot1"},
+    "relay": {"fleet": "tinyRobot", "robot": "tinyRobot2"}
+  },
+
+  "actions": {
+    "goto_site": {
+      "category": "go_to_place",
+      "waypoint": "pantry"
+    },
+
+    "scan": {
+      "category": "go_to_place",
+      "waypoint": "pantry",
+      "sensing": true,
+      "default_outcome": "e-scan-dirty"
+    },
+
+    "relay": {
+      "local": true,
+      "duration": 2.0
+    },
+
+    "broadcast": {
+      "local": true,
+      "duration": 2.0
+    }
+  }
+}
