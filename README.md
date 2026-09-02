@@ -4,7 +4,8 @@ An Open-RMF execution interface for [ePlanSys](https://github.com/ePlanSys/eplan
 Epistemic policies are dispatched as fleet-level RMF tasks, and the observations
 the robots make while executing them are returned to the epistemic state.
 
-Status: design. No implementation exists.
+Status: the survey mission runs end to end over the `rmf_demos` office fleet,
+in both of its branches.
 
 ## Separation from the planning stack
 
@@ -36,7 +37,7 @@ the corresponding RMF task, waits for completion, and calls `finish()` with the
 outcome the robot observed. `plansys2_msgs/ActionExecution` provides an
 `outcome` field for this purpose, on which the policy branches.
 
-## Open questions
+## Decisions
 
 ### 1. Allocation authority
 
@@ -46,38 +47,65 @@ records knowledge against those names. The RMF dispatcher receives bids and
 selects a robot. Where the two selections differ, the model records that an
 agent knows something it never sensed, and no error is raised.
 
-Two schemes are available.
+**Pinned.** The bridge binds each RMF task to the robot the planner named,
+through the `agents` table of its task map. The mechanism is
+`robot_task_request`, which carries a fleet and a robot and is handled directly
+by that robot's own `TaskManager` without a bid. RMF's traffic management,
+lifts and doors are retained in full; only its allocation is forgone.
 
-Under the pinned scheme, the bridge binds each RMF task to the robot named by
-the planner. This is sound and simple. It forgoes RMF's allocation while
-retaining its traffic management, and is the intended starting point.
+An agent bound to no robot is a hard error, and the bridge says so and refuses
+the action. The alternative, letting RMF choose, is precisely the failure this
+decision exists to prevent.
 
-Under the role-based scheme, the planner reasons over abstract agents, RMF
-selects the robot, and the bridge relabels the epistemic agent after dispatch.
-Relabelling an agent in a Kripke model during execution is not a trivial
-operation. This is the research variant.
-
-The choice is to be recorded here once settled.
+The role-based scheme, in which the planner reasons over abstract agents and
+the bridge relabels the epistemic agent after dispatch, remains the research
+variant. Relabelling an agent in a Kripke model during execution is not a
+trivial operation.
 
 ### 2. Outcome transport
 
-It must be established how an RMF task reports completion, and whether a result
-payload may accompany that report. The relevant interfaces are `rmf_task_msgs`,
-the dispatcher node, and the websocket API in `rmf_api_msgs`.
+Settled by reading the sources, since Open-RMF's own documentation does not
+address it: **a task carries no result payload.**
 
-If a payload can be returned, the bridge reads the outcome from it. If
-completion is reported as a bare success or failure, the outcome requires a
-separate channel, and the architecture given above is altered accordingly.
+`rmf_api_msgs`' `task_state.json` has no result, return or output property at
+any level, and its completion-bearing fields are a `status` token from a fixed
+enumeration and a finish time.
+`RobotUpdateHandle::ActionExecution::finished()` takes no argument, which is
+the exact API a performer would report through. The newer `DynamicEvent`
+action result carries a failure string, a status string and an event id, and
+nothing of the domain.
 
-The project rests on this assumption, and it should be resolved before any other
-work begins.
+Two free-form fields do travel with a task, and the bridge reads both:
+
+- an event's `detail` string, set through `SimpleEventState::update_detail`
+  and forwarded verbatim into every state update;
+- log entries, which a performer writes through `underway()` and its
+  neighbours.
+
+A value carrying the prefix `eplansys.outcome=` in either is read as the token
+the policy branches on. The log route is the one reachable from an ordinary
+`perform_action` callback; `detail` is tidier and needs a custom
+`rmf_task_sequence` event.
+
+On Humble this stream leaves the fleet adapter over the websocket named by the
+adapter's `server_uri` parameter and over nothing else. `StandardNames.hpp`
+declares only `task_api_requests` and `task_api_responses`; the ROS 2 mirror of
+`task_state_update` and `task_log_update` exists on rolling and not here. So
+the bridge is the websocket server the adapter dials.
 
 ### 3. Action to task mapping
 
-`eplansys` maps grounded epistemic action names to dispatchable expressions
-through an `action_mapping` JSON file. The corresponding mapping here targets
-RMF task descriptions. It remains to be decided whether to reuse that file
-format against a different target or to define a separate one.
+**A separate file**, keyed differently.
+
+`eplansys`'s `action_mapping.json` maps plank's grounded names to PlanSys2
+action expressions, and does its work inside the planner. By the time an action
+reaches a performer the grounded name is gone and what remains is a name and
+arguments, so a map keyed on grounded names could not be consulted here. The
+two files answer different questions at different times, and collapsing them
+would mean the bridge could not look anything up.
+
+The bridge's map binds agents to robots and says where each action sends one.
+`eplansys_rmf_demo/config/office_survey.json` is the worked example.
 
 ## Packages
 
@@ -85,6 +113,7 @@ format against a different target or to define a separate one.
 | --- | --- |
 | `eplansys_rmf_bridge` | the `ActionExecutorClient` that submits RMF tasks |
 | `eplansys_rmf_demo` | the survey mission over an RMF fleet |
+| `eplansys_rmf_probe` | diagnostics: submit one task, and watch what returns |
 
 ## Reference scenario
 
@@ -97,6 +126,35 @@ broadcasting would falsify the third conjunct.
 
 Executing this domain over an RMF fleet, with RMF driving the robots,
 constitutes the intended demonstration of the bridge.
+
+## Running it
+
+```
+ros2 launch eplansys_rmf_demo survey_rmf_launch.py
+ros2 launch eplansys_rmf_demo survey_rmf_launch.py site:=clean
+```
+
+One command brings up the office fleet, the planning system and the bridge.
+`site:` chooses what the scout turns out to find, and the policy takes a
+different branch for each: `relay-dirty_relay_scout` against
+`relay-clean_relay_scout`, with the robot driven by RMF either way.
+
+`rmf:=false` leaves the fleet to another terminal, and `headless:=true` runs
+Gazebo without a window.
+
+## Building
+
+`eplansys_rmf_bridge` looks for plansys2 with `QUIET` and builds its library
+without it, so the RMF half compiles and its tests run on a machine that has
+Open-RMF and no `eplansys`. The performers need both.
+
+```
+sudo apt install ros-humble-rmf-dev libwebsocketpp-dev libboost-system-dev
+colcon build
+```
+
+`rmf_demos` is not released into Humble and has to be built from source for
+the demo; its `humble` branch is the one to use.
 
 ## Dependencies
 

@@ -46,7 +46,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
-#include <rmf_websocket/BroadcastServer.hpp>
+#include <eplansys_rmf_bridge/WebsocketFeed.hpp>
 
 namespace {
 
@@ -357,18 +357,18 @@ int main(int argc, char** argv)
 
   Probe probe{outcome_prefix, all_logs, raw};
 
-  /* nullopt asks for every message with its envelope intact. Passing a
-   * selection would hand the callback msg["data"] alone, which would leave
-   * task states and task logs indistinguishable. */
-  const auto server = rmf_websocket::BroadcastServer::make(
-    port,
-    [&probe](const nlohmann::json& msg) { probe.receive(msg); },
-    std::nullopt);
+  /* The bridge's own websocket, and not rmf_websocket::BroadcastServer.
+   * Measured against 2.1.8, an adapter reports its connection open and
+   * publishes without error while that server's callback never fires, and a
+   * plain server on the same port receives every frame from the same
+   * adapter. */
+  eplansys_rmf_bridge::WebsocketFeed feed(
+    port, [&probe](const nlohmann::json & msg) {probe.receive(msg);});
 
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
 
-  server->start();
+  feed.start();
   std::cout << "[" << now_stamp() << "] listening on ws://localhost:" << port
             << "\n[" << now_stamp() << "] launch the fleet adapter with "
             << "server_uri:=\"ws://localhost:" << port << "\"" << std::endl;
@@ -376,7 +376,7 @@ int main(int argc, char** argv)
   while (!g_stop)
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  server->stop();
+  feed.stop();
   std::cout << "\n[" << now_stamp() << "] saw " << probe.task_count()
             << " task(s)" << std::endl;
   return 0;

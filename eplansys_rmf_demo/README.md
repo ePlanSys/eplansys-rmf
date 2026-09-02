@@ -58,3 +58,8 @@ The bridge then reports what the fleet observed and ignores the default.
 The bridge is the websocket server the fleet adapter dials, on 7879. The
 `rmf_demos` panel owns 7878 and is switched off here, since an adapter has one
 `server_uri` and cannot feed both.
+
+`office_fleet.launch.xml` exists because `rmf_demos_gz_classic/office.launch.xml`
+forwards neither `server_uri` nor `use_rmf_panel` down to `common.launch.xml`.
+Setting them on its command line does nothing, silently. This assembles the
+same demo from the same pieces and passes both.

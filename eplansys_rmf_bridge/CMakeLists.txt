@@ -10,27 +10,22 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(plansys2_executor REQUIRED)
-find_package(plansys2_msgs REQUIRED)
+# The library below is the RMF half of the bridge and needs no planner. Only
+# the performer executable does, so plansys2 is looked for and not required:
+# that lets the library, its tests and the probes build on a machine with
+# Open-RMF and no eplansys, which is what CI has.
+find_package(plansys2_executor QUIET)
+find_package(plansys2_msgs QUIET)
 find_package(rmf_task_msgs REQUIRED)
-find_package(rmf_websocket REQUIRED)
+find_package(rmf_fleet_msgs REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system)
 find_package(nlohmann_json REQUIRED)
-
-# rmf_websocket's exported interface names the schema validator as a bare
-# -lnlohmann_json_schema_validator, and the vendor package ships no imported
-# target for it, so the library has to be located by hand.
-find_package(nlohmann_json_schema_validator_vendor REQUIRED)
-find_library(JSON_SCHEMA_VALIDATOR_LIB
-  NAMES nlohmann_json_schema_validator
-  REQUIRED
-)
-get_filename_component(JSON_SCHEMA_VALIDATOR_DIR
-  "${JSON_SCHEMA_VALIDATOR_LIB}" DIRECTORY)
-link_directories("${JSON_SCHEMA_VALIDATOR_DIR}")
+find_package(Eigen3 REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/TaskMapping.cpp
   src/RmfTaskClient.cpp
+  src/WebsocketFeed.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -38,15 +33,22 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 target_link_libraries(${PROJECT_NAME}
   rclcpp::rclcpp
-  rmf_websocket::rmf_websocket
   nlohmann_json::nlohmann_json
-  ${JSON_SCHEMA_VALIDATOR_LIB}
+  Boost::system
+  pthread
   ${rmf_task_msgs_TARGETS}
+  ${rmf_fleet_msgs_TARGETS}
 )
 
-add_executable(rmf_action_node src/rmf_action_node.cpp)
-target_link_libraries(rmf_action_node ${PROJECT_NAME})
-ament_target_dependencies(rmf_action_node plansys2_executor plansys2_msgs)
+if(plansys2_executor_FOUND AND plansys2_msgs_FOUND)
+  add_executable(rmf_action_node src/rmf_action_node.cpp)
+  target_link_libraries(rmf_action_node ${PROJECT_NAME})
+  ament_target_dependencies(rmf_action_node plansys2_executor plansys2_msgs)
+  install(TARGETS rmf_action_node DESTINATION lib/${PROJECT_NAME})
+else()
+  message(STATUS
+    "plansys2 not found: building the RMF library without the performers")
+endif()
 
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS ${PROJECT_NAME}
@@ -55,7 +57,12 @@ install(TARGETS ${PROJECT_NAME}
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-install(TARGETS rmf_action_node DESTINATION lib/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_task_mapping test/test_task_mapping.cpp)
+  target_link_libraries(test_task_mapping ${PROJECT_NAME})
+endif()
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})

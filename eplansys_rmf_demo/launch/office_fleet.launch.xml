@@ -1,0 +1,46 @@
+<?xml version='1.0' ?>
+<!--
+  The rmf_demos office fleet, with the two arguments the bridge needs.
+
+  rmf_demos_gz_classic/office.launch.xml forwards only gazebo_version,
+  use_sim_time and failover_mode, and rmf_demos/office.launch.xml forwards only
+  use_sim_time. Neither passes server_uri or use_rmf_panel down to
+  common.launch.xml, so setting them on the command line of either has no
+  effect. This assembles the same demo from the same pieces and passes both.
+
+  server_uri is how the fleet adapter is told where to publish its task states
+  and logs, and on Humble that websocket is the only place they go. The panel
+  is off because it owns port 7878 and an adapter has one server_uri.
+-->
+<launch>
+  <arg name="gazebo_version" default="11"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="failover_mode" default="false"/>
+  <arg name="server_uri" default=""/>
+  <arg name="use_rmf_panel" default="false"/>
+  <arg name="headless" default="false"/>
+
+  <include file="$(find-pkg-share rmf_demos)/common.launch.xml">
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    <arg name="viz_config_file" value="$(find-pkg-share rmf_demos)/include/office/office.rviz"/>
+    <arg name="config_file" value="$(find-pkg-share rmf_demos_maps)/office/office.building.yaml"/>
+    <arg name="dashboard_config_file" value="$(find-pkg-share rmf_demos_dashboard_resources)/office/dashboard_config.json"/>
+    <arg name="server_uri" value="$(var server_uri)"/>
+    <arg name="use_rmf_panel" value="$(var use_rmf_panel)"/>
+    <arg name="headless" value="$(var headless)"/>
+  </include>
+
+  <group>
+    <include file="$(find-pkg-share rmf_demos_fleet_adapter)/launch/fleet_adapter.launch.xml">
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="nav_graph_file" value="$(find-pkg-share rmf_demos_maps)/maps/office/nav_graphs/0.yaml"/>
+      <arg name="config_file" value="$(find-pkg-share rmf_demos)/config/office/tinyRobot_config.yaml"/>
+      <arg name="server_uri" value="$(var server_uri)"/>
+    </include>
+  </group>
+
+  <include file="$(find-pkg-share rmf_demos_gz_classic)/simulation.launch.xml">
+    <arg name="map_name" value="office"/>
+    <arg name="gazebo_version" value="$(var gazebo_version)"/>
+  </include>
+</launch>

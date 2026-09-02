@@ -13,11 +13,17 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>plansys2_executor</depend>
-  <depend>plansys2_msgs</depend>
+  <build_depend>plansys2_executor</build_depend>
+  <exec_depend>plansys2_executor</exec_depend>
+  <build_depend>plansys2_msgs</build_depend>
+  <exec_depend>plansys2_msgs</exec_depend>
   <depend>rmf_task_msgs</depend>
-  <depend>rmf_websocket</depend>
+  <depend>rmf_fleet_msgs</depend>
+  <depend>libwebsocketpp-dev</depend>
+  <depend>libboost-system-dev</depend>
   <depend>nlohmann-json-dev</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

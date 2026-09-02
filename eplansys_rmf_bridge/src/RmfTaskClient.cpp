@@ -14,8 +14,10 @@
 
 #include "eplansys_rmf_bridge/RmfTaskClient.hpp"
 
+#include <chrono>
 #include <random>
 #include <utility>
+#include <vector>
 
 namespace eplansys_rmf_bridge
 {
@@ -58,13 +60,18 @@ RmfTaskClient::RmfTaskClient(
       on_response(msg);
     });
 
-  // nullopt keeps the envelope, so one server can tell task states from task
-  // logs. Naming a selection would deliver msg["data"] alone.
-  server_ = rmf_websocket::BroadcastServer::make(
-    port,
-    [this](const nlohmann::json & msg) {on_websocket(msg);},
-    std::nullopt);
-  server_->start();
+  feed_ = std::make_unique<WebsocketFeed>(
+    port, [this](const nlohmann::json & msg) {on_websocket(msg);});
+  feed_->start();
+
+  fleet_sub_ = node_->create_subscription<rmf_fleet_msgs::msg::FleetState>(
+    "fleet_states", 10,
+    [this](const rmf_fleet_msgs::msg::FleetState::SharedPtr msg) {
+      on_fleet_state(msg);
+    });
+
+  flush_timer_ = node_->create_wall_timer(
+    std::chrono::milliseconds(250), [this]() {flush_unpublished();});
 
   RCLCPP_INFO(
     node_->get_logger(),
@@ -74,15 +81,14 @@ RmfTaskClient::RmfTaskClient(
 
 RmfTaskClient::~RmfTaskClient()
 {
-  if (server_) {
-    server_->stop();
+  if (feed_) {
+    feed_->stop();
   }
 }
 
 nlohmann::json RmfTaskClient::go_to_place(
   const std::string & waypoint,
   std::optional<double> orientation,
-  int64_t start_millis,
   const std::vector<std::string> & labels)
 {
   nlohmann::json description;
@@ -100,7 +106,13 @@ nlohmann::json RmfTaskClient::go_to_place(
   request["description"]["category"] = "go_to_place";
   request["description"]["phases"] =
     nlohmann::json::array({nlohmann::json{{"activity", activity}}});
-  request["unix_millis_earliest_start_time"] = start_millis;
+  /* No unix_millis_earliest_start_time. It is optional, and the bridge has no
+   * business asserting one: a simulated fleet runs on /clock, where now is a
+   * few seconds past zero, while this node runs on the wall clock. Stamping a
+   * wall-clock time onto a task the fleet reads against sim time puts its
+   * earliest start about fifty thousand years in the future, and the task sits
+   * there while the robot idles. Leaving it out means as soon as possible,
+   * which is what every action here wants. */
   request["labels"] = labels;
   request["requester"] = "eplansys_rmf_bridge";
   return request;
@@ -116,7 +128,7 @@ std::string RmfTaskClient::submit_to_robot(
   payload["fleet"] = fleet;
   payload["robot"] = robot;
   payload["request"] = request;
-  return submit(payload);
+  return submit(payload, fleet, robot);
 }
 
 std::string RmfTaskClient::submit_dispatched(const nlohmann::json & request)
@@ -124,24 +136,104 @@ std::string RmfTaskClient::submit_dispatched(const nlohmann::json & request)
   nlohmann::json payload;
   payload["type"] = "dispatch_task_request";
   payload["request"] = request;
-  return submit(payload);
+  return submit(payload, {}, {});
 }
 
-std::string RmfTaskClient::submit(const nlohmann::json & payload)
+std::string RmfTaskClient::submit(
+  const nlohmann::json & payload,
+  const std::string & fleet,
+  const std::string & robot)
 {
   const auto request_id = make_request_id();
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     by_request_[request_id] = TaskStatus{};
+    unpublished_[request_id] = Unpublished{payload, fleet, robot};
+  }
+
+  if (!try_publish(request_id)) {
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "%s/%s has not announced itself yet; holding the request until it does",
+      fleet.c_str(), robot.c_str());
+  }
+
+  return request_id;
+}
+
+bool RmfTaskClient::try_publish(const std::string & request_id)
+{
+  Unpublished pending;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = unpublished_.find(request_id);
+    if (it == unpublished_.end()) {
+      return true;
+    }
+    pending = it->second;
+
+    if (pending.robot.empty()) {
+      // A dispatched request goes to the dispatcher, so a subscriber is all
+      // that can be checked for.
+      if (request_pub_->get_subscription_count() == 0) {
+        return false;
+      }
+    } else if (
+      known_robots_.count({pending.fleet, pending.robot}) == 0)
+    {
+      return false;
+    }
+
+    unpublished_.erase(it);
   }
 
   rmf_task_msgs::msg::ApiRequest msg;
   msg.request_id = request_id;
-  msg.json_msg = payload.dump();
+  msg.json_msg = pending.payload.dump();
   request_pub_->publish(msg);
+  return true;
+}
 
-  return request_id;
+void RmfTaskClient::flush_unpublished()
+{
+  // Once a second, say what the websocket is actually carrying. Silence here
+  // is the difference between a fleet that is not connected and one whose
+  // frames are not being understood, and the two look identical otherwise.
+  if (++flush_ticks_ % 40 == 0) {
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "websocket: %zu connection(s), %zu frame(s) in, %zu task state(s) seen",
+      feed_->connections(), feed_->received(), task_to_request_.size());
+  }
+
+  std::vector<std::string> waiting;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (unpublished_.empty()) {
+      return;
+    }
+    waiting.reserve(unpublished_.size());
+    for (const auto & [request_id, pending] : unpublished_) {
+      (void)pending;
+      waiting.push_back(request_id);
+    }
+  }
+
+  for (const auto & request_id : waiting) {
+    if (try_publish(request_id)) {
+      RCLCPP_INFO(node_->get_logger(), "robot is up; request sent");
+    }
+  }
+}
+
+void RmfTaskClient::on_fleet_state(
+  const rmf_fleet_msgs::msg::FleetState::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto & robot : msg->robots) {
+    known_robots_.emplace(msg->name, robot.name);
+  }
 }
 
 TaskStatus RmfTaskClient::status(const std::string & request_id) const

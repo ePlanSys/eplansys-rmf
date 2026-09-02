@@ -18,13 +18,17 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rmf_fleet_msgs/msg/fleet_state.hpp>
 #include <rmf_task_msgs/msg/api_request.hpp>
 #include <rmf_task_msgs/msg/api_response.hpp>
-#include <rmf_websocket/BroadcastServer.hpp>
+#include "eplansys_rmf_bridge/WebsocketFeed.hpp"
 
 namespace eplansys_rmf_bridge
 {
@@ -61,7 +65,7 @@ struct TaskStatus
 /// only over a websocket: on Humble a fleet adapter publishes its task states
 /// and logs to the URI given as its `server_uri` parameter and mirrors them
 /// onto no ROS topic. So the bridge has to be the server the adapter dials,
-/// which is what BroadcastServer provides.
+/// which is what WebsocketFeed is.
 ///
 /// The outcome is read out of that stream. RMF reports completion as a status
 /// token and nothing else --- `task_state.json` has no result field and
@@ -85,6 +89,14 @@ public:
 
   /// Submit a task pinned to one robot. Returns the request id, which is what
   /// status() takes: the RMF task id is not known until the response arrives.
+  ///
+  /// The publish may be deferred. A performer can be dispatched its first
+  /// action within a second of the process starting, well before the fleet
+  /// adapter is up, and a robot_task_request published then is simply lost:
+  /// only the named robot's own TaskManager handles one, the dispatcher
+  /// ignores it, and no error is raised anywhere. So the request waits until
+  /// that robot has announced itself on fleet_states, which is the earliest
+  /// point at which its adapter is known to be running and discovered.
   std::string submit_to_robot(
     const std::string & fleet,
     const std::string & robot,
@@ -101,11 +113,23 @@ public:
   static nlohmann::json go_to_place(
     const std::string & waypoint,
     std::optional<double> orientation,
-    int64_t start_millis,
     const std::vector<std::string> & labels);
 
 private:
-  std::string submit(const nlohmann::json & payload);
+  std::string submit(
+    const nlohmann::json & payload,
+    const std::string & fleet,
+    const std::string & robot);
+
+  /// Publishes if the request's target is ready. Returns false if it is not,
+  /// leaving the request queued for the timer.
+  bool try_publish(const std::string & request_id);
+
+  /// Publishes whatever has been waiting for its robot to appear.
+  void flush_unpublished();
+
+  void on_fleet_state(const rmf_fleet_msgs::msg::FleetState::SharedPtr msg);
+
   void on_response(const rmf_task_msgs::msg::ApiResponse::SharedPtr msg);
   void on_websocket(const nlohmann::json & msg);
   void on_task_state(const nlohmann::json & state);
@@ -117,12 +141,27 @@ private:
 
   rclcpp::Publisher<rmf_task_msgs::msg::ApiRequest>::SharedPtr request_pub_;
   rclcpp::Subscription<rmf_task_msgs::msg::ApiResponse>::SharedPtr response_sub_;
-  std::shared_ptr<rmf_websocket::BroadcastServer> server_;
+  rclcpp::Subscription<rmf_fleet_msgs::msg::FleetState>::SharedPtr fleet_sub_;
+  std::unique_ptr<WebsocketFeed> feed_;
 
   /// The websocket runs on its own thread, so everything below it is shared.
   mutable std::mutex mutex_;
   std::map<std::string, TaskStatus> by_request_;
   std::map<std::string, std::string> task_to_request_;
+
+  /// A request built but not yet on the wire.
+  struct Unpublished
+  {
+    nlohmann::json payload;
+    /// Empty for a dispatched request, which any fleet may answer.
+    std::string fleet;
+    std::string robot;
+  };
+
+  std::map<std::string, Unpublished> unpublished_;
+  std::set<std::pair<std::string, std::string>> known_robots_;
+  rclcpp::TimerBase::SharedPtr flush_timer_;
+  std::size_t flush_ticks_{0};
 };
 
 }  // namespace eplansys_rmf_bridge

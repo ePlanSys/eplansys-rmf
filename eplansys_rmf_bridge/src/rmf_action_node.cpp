@@ -126,14 +126,13 @@ private:
       return false;
     }
 
-    const int64_t start_millis = now().nanoseconds() / 1000000;
     const std::vector<std::string> labels{
       "eplansys.action=" + action_,
       "eplansys.agent=" + agent,
     };
 
     const auto request = RmfTaskClient::go_to_place(
-      waypoint, spec_.orientation, start_millis, labels);
+      waypoint, spec_.orientation, labels);
 
     request_id_ = client_->submit_to_robot(
       binding->fleet, binding->robot, request);

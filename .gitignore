@@ -21,3 +21,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Dropped by rmf_traffic_schedule into whatever directory it is run from
+.rmf_schedule_node.yaml

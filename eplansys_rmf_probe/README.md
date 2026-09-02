@@ -18,7 +18,14 @@ settles whether an epistemic outcome token survives the trip.
 On Humble the task state and log stream leaves the fleet adapter over the
 websocket named by the adapter's `server_uri` parameter, and over nothing
 else: the ROS 2 mirror of those topics exists only on rolling. `state_probe`
-is therefore a websocket server, built on `rmf_websocket::BroadcastServer`.
+is therefore a websocket server, built on the bridge's `WebsocketFeed`.
+
+Not on `rmf_websocket::BroadcastServer`, which is the obvious choice and does
+not work. Measured against 2.1.8: an adapter reports its connection open and
+publishes without error while that server's callback never fires, and a plain
+websocket server on the same port receives every frame from the same adapter.
+It also aborts the process on the first non-JSON frame, and `BroadcastClient`
+opens by sending a bare `Hello`.
 
 ## Running
 
@@ -31,9 +38,13 @@ ros2 run eplansys_rmf_probe state_probe --port 7879
 ```
 
 ```
-ros2 launch rmf_demos_gz_classic office.launch.xml \
+ros2 launch eplansys_rmf_demo office_fleet.launch.xml \
     use_rmf_panel:=false server_uri:="ws://localhost:7879"
 ```
+
+`office_fleet.launch.xml` and not `rmf_demos_gz_classic/office.launch.xml`:
+that one forwards neither `server_uri` nor `use_rmf_panel` down to
+`common.launch.xml`, so passing them to it has no effect at all.
 
 Then submit a task pinned to a named robot:
 

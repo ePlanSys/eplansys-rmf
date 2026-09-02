@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build and test
+    runs-on: ubuntu-22.04
+    container: ros:humble-ros-base-jammy
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src/eplansys-rmf
+
+      # Open-RMF is released into Humble in full, so this is binaries rather
+      # than a source build of rmf_ros2. websocketpp and boost::system are for
+      # WebsocketFeed, which serves the socket a fleet adapter is pointed at.
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ros-humble-rmf-dev \
+            libwebsocketpp-dev \
+            libboost-system-dev \
+            nlohmann-json3-dev \
+            python3-colcon-common-extensions \
+
+      # eplansys is deliberately absent. eplansys_rmf_bridge finds plansys2
+      # with QUIET and builds its library either way, so what is exercised
+      # here is the whole RMF half: the task map, the websocket, and the
+      # submission path. The performers need a planner and are covered by
+      # running the demo.
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --packages-select eplansys_rmf_bridge eplansys_rmf_probe \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Test
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon test --packages-select eplansys_rmf_bridge --event-handlers console_direct+
+          colcon test-result --verbose
+
+      # The unit tests cover the map. This covers the socket, which is the
+      # part that was wrong twice: it drives state_probe the way a fleet
+      # adapter does and checks that an outcome token comes back out.
+      - name: Websocket smoke test
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          src/eplansys-rmf/.github/workflows/smoke_test.sh
+
+  lint:
+    name: lint
+    runs-on: ubuntu-22.04
+    container: ros:humble-ros-base-jammy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install linters
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ros-humble-ament-cmake-uncrustify \
+            ros-humble-ament-cmake-cpplint \
+            ros-humble-ament-cmake-copyright
+
+      - name: Uncrustify
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          ament_uncrustify eplansys_rmf_bridge eplansys_rmf_probe
+
+      - name: Copyright
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          ament_copyright eplansys_rmf_bridge eplansys_rmf_probe
