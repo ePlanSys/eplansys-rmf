@@ -50,7 +50,7 @@ Then submit a task pinned to a named robot:
 
 ```
 ros2 run eplansys_rmf_probe submit_probe -F tinyRobot -R tinyRobot1 \
-    -p patrol_A1 --use-sim-time
+    -p patrol_A1
 ```
 
 `submit_probe` prints the booking id it was given. `state_probe` groups

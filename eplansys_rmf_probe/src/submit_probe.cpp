@@ -63,22 +63,20 @@ struct Options
   std::optional<double> orientation;
   bool dispatch = false;
   double timeout = 10.0;
-  bool use_sim_time = false;
 };
 
 void usage()
 {
   std::cout <<
     "usage: submit_probe [-F fleet] [-R robot] [-p waypoint] [-o degrees]\n"
-    "                    [--dispatch] [--timeout S] [--use-sim-time]\n"
+    "                    [--dispatch] [--timeout S]\n"
     "\n"
     "  -F, --fleet      fleet name, default tinyRobot\n"
     "  -R, --robot      robot name, default tinyRobot1\n"
     "  -p, --place      nav graph waypoint to go to, default patrol_A1\n"
     "  -o, --orient     final orientation in degrees\n"
     "      --dispatch   let RMF allocate instead of pinning, for comparison\n"
-    "      --timeout    seconds to wait for the ApiResponse, default 10\n"
-    "      --use-sim-time  required when the demo runs in simulation\n";
+    "      --timeout    seconds to wait for the ApiResponse, default 10\n";
 }
 
 }  // namespace
@@ -102,8 +100,6 @@ int main(int argc, char** argv)
       opt.dispatch = true;
     else if (arg == "--timeout" && i + 1 < argc)
       opt.timeout = std::stod(argv[++i]);
-    else if (arg == "--use-sim-time")
-      opt.use_sim_time = true;
     else if (arg == "-h" || arg == "--help")
     {
       usage();
@@ -119,9 +115,6 @@ int main(int argc, char** argv)
 
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("eplansys_rmf_submit_probe");
-
-  if (opt.use_sim_time)
-    node->set_parameter(rclcpp::Parameter("use_sim_time", true));
 
   const auto transient_qos = rclcpp::QoS(1).reliable().transient_local();
   auto pub = node->create_publisher<rmf_task_msgs::msg::ApiRequest>(
@@ -140,9 +133,6 @@ int main(int argc, char** argv)
       response = nlohmann::json::parse(msg->json_msg, nullptr, false);
     });
 
-  const auto now = node->get_clock()->now();
-  const int64_t start_millis = now.nanoseconds() / 1000000;
-
   nlohmann::json go_to;
   go_to["waypoint"] = opt.place;
   if (opt.orientation.has_value())
@@ -157,7 +147,11 @@ int main(int argc, char** argv)
   request["description"]["category"] = "go_to_place";
   request["description"]["phases"] = nlohmann::json::array(
     {nlohmann::json{{"activity", activity}}});
-  request["unix_millis_earliest_start_time"] = start_millis;
+  /* No unix_millis_earliest_start_time. It is optional, and stamping one is
+   * a trap: a simulated fleet reads it against /clock, where now is a few
+   * seconds past zero, while this node runs on the wall clock. The task's
+   * earliest start then lands about fifty thousand years out and the robot
+   * holds position, with the task accepted and nothing moving. */
   /* Labels come back untouched in booking.labels of every task state, which
    * is where the bridge will carry the ePlanSys action id. */
   request["labels"] = nlohmann::json::array({"eplansys.probe=" + request_id});
@@ -191,9 +185,10 @@ int main(int argc, char** argv)
   msg.json_msg = payload.dump();
   pub->publish(msg);
 
-  /* Steady clock deliberately: with use_sim_time the node clock only advances
-   * while the simulation runs, and a paused sim would hang here rather than
-   * time out. */
+  /* Steady clock deliberately, and no use_sim_time on this node at all. The
+   * request carries no start time, so the node never needs the fleet's clock;
+   * and a timeout measured against a simulation that can be paused would hang
+   * rather than expire. */
   const auto deadline = std::chrono::steady_clock::now() +
     std::chrono::milliseconds(static_cast<int64_t>(opt.timeout * 1000));
 

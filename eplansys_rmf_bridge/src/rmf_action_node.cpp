@@ -29,6 +29,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "eplansys_rmf_bridge/RmfTaskClient.hpp"
@@ -67,7 +68,7 @@ private:
     if (!started_) {
       started_ = true;
       begun_ = now();
-      request_id_.clear();
+      request_ids_.clear();
 
       if (spec_.local) {
         RCLCPP_INFO(
@@ -100,48 +101,88 @@ private:
     return args.empty() ? std::string{} : args.front();
   }
 
+  /// Which agents this action moves, and where each of them goes.
+  ///
+  /// An ordinary action moves the agent named by its first argument. An action
+  /// declaring `movements` moves several at once, which is the only way robots
+  /// move together: the executor runs policy nodes strictly in order, so
+  /// concurrency has to be inside one action rather than between two.
+  std::vector<std::pair<std::string, std::string>> legs() const
+  {
+    const auto & args = get_arguments();
+    std::vector<std::pair<std::string, std::string>> out;
+
+    if (spec_.movements.empty()) {
+      out.emplace_back(
+        acting_agent(), mapping_->waypoint_for(spec_, acting_agent(), args));
+      return out;
+    }
+
+    for (const auto & movement : spec_.movements) {
+      const auto agent_index = static_cast<std::size_t>(movement.agent_arg);
+      const auto zone_index = static_cast<std::size_t>(movement.waypoint_arg);
+      if (movement.agent_arg < 0 || movement.waypoint_arg < 0 ||
+        agent_index >= args.size() || zone_index >= args.size())
+      {
+        out.emplace_back(std::string{}, std::string{});
+        continue;
+      }
+      out.emplace_back(
+        args[agent_index], mapping_->waypoint_of_zone(args[zone_index]));
+    }
+    return out;
+  }
+
   bool begin_task()
   {
-    const auto agent = acting_agent();
-    if (agent.empty()) {
-      RCLCPP_ERROR(get_logger(), "%s: no agent argument", action_.c_str());
-      return false;
+    request_ids_.clear();
+
+    for (const auto & [agent, waypoint] : legs()) {
+      if (agent.empty()) {
+        RCLCPP_ERROR(get_logger(), "%s: no agent argument", action_.c_str());
+        return false;
+      }
+
+      const auto binding = mapping_->agent(agent);
+      if (!binding.has_value()) {
+        RCLCPP_ERROR(
+          get_logger(),
+          "%s: agent \"%s\" is bound to no robot. Submitting anyway would let "
+          "RMF pick, and the model would credit %s with sensing something it "
+          "never saw.", action_.c_str(), agent.c_str(), agent.c_str());
+        return false;
+      }
+
+      if (waypoint.empty()) {
+        RCLCPP_ERROR(
+          get_logger(), "%s: no waypoint for agent \"%s\"",
+          action_.c_str(), agent.c_str());
+        return false;
+      }
+
+      const std::vector<std::string> labels{
+        "eplansys.action=" + action_,
+        "eplansys.agent=" + agent,
+      };
+
+      const auto request = RmfTaskClient::go_to_place(
+        waypoint, spec_.orientation, labels);
+
+      request_ids_.push_back(
+        client_->submit_to_robot(binding->fleet, binding->robot, request));
+
+      RCLCPP_INFO(
+        get_logger(), "%s: %s -> %s/%s heading for %s",
+        action_.c_str(), agent.c_str(), binding->fleet.c_str(),
+        binding->robot.c_str(), waypoint.c_str());
     }
 
-    const auto binding = mapping_->agent(agent);
-    if (!binding.has_value()) {
-      RCLCPP_ERROR(
-        get_logger(),
-        "%s: agent \"%s\" is bound to no robot. Submitting anyway would let "
-        "RMF pick, and the model would credit %s with sensing something it "
-        "never saw.", action_.c_str(), agent.c_str(), agent.c_str());
-      return false;
+    if (request_ids_.size() > 1) {
+      RCLCPP_INFO(
+        get_logger(), "%s: %zu robots moving on one action",
+        action_.c_str(), request_ids_.size());
     }
-
-    const auto waypoint = mapping_->waypoint_for(spec_, agent);
-    if (waypoint.empty()) {
-      RCLCPP_ERROR(
-        get_logger(), "%s: no waypoint for agent \"%s\"",
-        action_.c_str(), agent.c_str());
-      return false;
-    }
-
-    const std::vector<std::string> labels{
-      "eplansys.action=" + action_,
-      "eplansys.agent=" + agent,
-    };
-
-    const auto request = RmfTaskClient::go_to_place(
-      waypoint, spec_.orientation, labels);
-
-    request_id_ = client_->submit_to_robot(
-      binding->fleet, binding->robot, request);
-
-    RCLCPP_INFO(
-      get_logger(), "%s: %s -> %s/%s heading for %s",
-      action_.c_str(), agent.c_str(), binding->fleet.c_str(),
-      binding->robot.c_str(), waypoint.c_str());
-    return true;
+    return !request_ids_.empty();
   }
 
   void run_local()
@@ -157,40 +198,61 @@ private:
 
   void run_task()
   {
-    const auto status = client_->status(request_id_);
     const auto elapsed = (now() - begun_).seconds();
 
-    switch (status.phase) {
-      case TaskPhase::Rejected:
-        conclude(false, "RMF refused the task", "");
-        return;
+    // The action is over when every robot it moved is done, and it fails as
+    // soon as any one of them does: half a joint move is not a state the model
+    // has a world for.
+    std::size_t finished = 0;
+    std::string outcome;
+    std::string last_status;
 
-      case TaskPhase::Succeeded:
-        conclude(true, "done", resolve_outcome(status.outcome));
-        return;
+    for (const auto & request_id : request_ids_) {
+      const auto status = client_->status(request_id);
+      last_status = status.rmf_status;
 
-      case TaskPhase::Failed:
-        conclude(false, status.error, "");
-        return;
+      switch (status.phase) {
+        case TaskPhase::Rejected:
+          conclude(false, "RMF refused the task", "");
+          return;
 
-      case TaskPhase::Pending:
-      case TaskPhase::Running:
-      default:
-        break;
+        case TaskPhase::Failed:
+          conclude(false, status.error, "");
+          return;
+
+        case TaskPhase::Succeeded:
+          ++finished;
+          if (!status.outcome.empty()) {
+            outcome = status.outcome;
+          }
+          break;
+
+        case TaskPhase::Pending:
+        case TaskPhase::Running:
+        default:
+          break;
+      }
+    }
+
+    if (finished == request_ids_.size()) {
+      conclude(true, "done", resolve_outcome(outcome));
+      return;
     }
 
     if (timeout_ > 0.0 && elapsed > timeout_) {
       RCLCPP_ERROR(
-        get_logger(), "%s: RMF task %s still %s after %.0fs",
-        action_.c_str(),
-        status.task_id.empty() ? "(unacknowledged)" : status.task_id.c_str(),
-        status.rmf_status.empty() ? "unreported" : status.rmf_status.c_str(),
-        elapsed);
+        get_logger(), "%s: %zu of %zu RMF task(s) done after %.0fs, last %s",
+        action_.c_str(), finished, request_ids_.size(), elapsed,
+        last_status.empty() ? "unreported" : last_status.c_str());
       conclude(false, "RMF task timed out", "");
       return;
     }
 
-    send_feedback(0.5f, status.rmf_status.empty() ? "submitted" : status.rmf_status);
+    send_feedback(
+      request_ids_.empty()
+      ? 0.5f
+      : static_cast<float>(finished) / static_cast<float>(request_ids_.size()),
+      last_status.empty() ? "submitted" : last_status);
   }
 
   /// An ordinary action reports nothing. A sensing action reports what the
@@ -209,27 +271,30 @@ private:
       return carried;
     }
 
-    if (spec_.default_outcome.empty()) {
+    const auto configured = mapping_->outcome_for(spec_, get_arguments());
+
+    if (configured.empty()) {
       RCLCPP_ERROR(
         get_logger(),
-        "%s: sensing action carried no outcome and has no default_outcome. "
-        "The policy has nothing to branch on.", action_.c_str());
+        "%s: sensing action carried no outcome, and the map names none for "
+        "these arguments. The policy has nothing to branch on.",
+        action_.c_str());
       return {};
     }
 
     RCLCPP_WARN(
       get_logger(),
-      "%s: RMF carried no outcome, falling back to default_outcome \"%s\". "
+      "%s: RMF carried no outcome, falling back to the map's \"%s\". "
       "A fleet adapter reporting what it sensed would override this.",
-      action_.c_str(), spec_.default_outcome.c_str());
-    return spec_.default_outcome;
+      action_.c_str(), configured.c_str());
+    return configured;
   }
 
   void conclude(bool success, const std::string & status, const std::string & outcome)
   {
     finish(success, 1.0, status, outcome);
     started_ = false;
-    request_id_.clear();
+    request_ids_.clear();
   }
 
   std::string action_;
@@ -240,7 +305,7 @@ private:
 
   bool started_{false};
   rclcpp::Time begun_;
-  std::string request_id_;
+  std::vector<std::string> request_ids_;
 };
 
 }  // namespace eplansys_rmf_bridge

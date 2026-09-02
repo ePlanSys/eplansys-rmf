@@ -53,6 +53,24 @@ private:
   std::string path_;
 };
 
+const char * kHotel = R"({
+  "zones": {
+    "lobby": "lobby",
+    "l2_suite": "L2_master_suite",
+    "l3_suite": "L3_master_suite"
+  },
+  "agents": {
+    "inspector": {"fleet": "tinyRobot", "robot": "tinyBot_1"}
+  },
+  "actions": {
+    "goto_zone":  {"waypoint_arg": 2},
+    "look_into":  {"waypoint_arg": 1, "sensing": true, "outcome_arg": 1,
+                   "outcomes": {"l2_suite": "e-inspect-wet"},
+                   "default_outcome": "e-inspect-dry"},
+    "radio":      {"local": true}
+  }
+})";
+
 const char * kSurvey = R"({
   "agents": {
     "scout": {"fleet": "tinyRobot", "robot": "tinyRobot1"},
@@ -126,8 +144,8 @@ TEST(TaskMapping, PerAgentWaypointWins)
   const auto map = TaskMapping::load(file.path());
 
   const auto scan = *map.action("scan");
-  EXPECT_EQ(map.waypoint_for(scan, "scout"), "lounge");
-  EXPECT_EQ(map.waypoint_for(scan, "relay"), "pantry");
+  EXPECT_EQ(map.waypoint_for(scan, "scout", {}), "lounge");
+  EXPECT_EQ(map.waypoint_for(scan, "relay", {}), "pantry");
 }
 
 TEST(TaskMapping, ListsEveryActionForAPerformer)
@@ -155,6 +173,61 @@ TEST(TaskMapping, MapWithoutActionsIsRejected)
 {
   TempMap file{R"({"agents": {"scout": {"robot": "tinyRobot1"}}})"};
   EXPECT_THROW(TaskMapping::load(file.path()), std::runtime_error);
+}
+
+// The destination of a move is an argument, not a fixture: one `goto_zone`
+// performer serves every zone in the building.
+TEST(TaskMapping, WaypointComesFromTheNamedArgument)
+{
+  TempMap file{kHotel};
+  const auto map = TaskMapping::load(file.path());
+  const auto go = *map.action("goto_zone");
+
+  EXPECT_EQ(
+    map.waypoint_for(go, "inspector", {"inspector", "lobby", "l3_suite"}),
+    "L3_master_suite");
+  EXPECT_EQ(
+    map.waypoint_for(go, "inspector", {"inspector", "l3_suite", "lobby"}),
+    "lobby");
+}
+
+// A zone the table does not name is passed through, so a map may name RMF
+// waypoints directly and skip the indirection.
+TEST(TaskMapping, UnlistedZoneIsItsOwnWaypoint)
+{
+  TempMap file{kHotel};
+  const auto map = TaskMapping::load(file.path());
+  EXPECT_EQ(map.waypoint_of_zone("restaurant"), "restaurant");
+}
+
+// Which suite is flooded is the simulator's ground truth, and a sensing action
+// performed in several places has to report a different answer in each.
+TEST(TaskMapping, OutcomeDependsOnWhereItLooked)
+{
+  TempMap file{kHotel};
+  const auto map = TaskMapping::load(file.path());
+  const auto look = *map.action("look_into");
+
+  EXPECT_EQ(map.outcome_for(look, {"inspector", "l2_suite"}), "e-inspect-wet");
+  EXPECT_EQ(map.outcome_for(look, {"inspector", "l3_suite"}), "e-inspect-dry");
+}
+
+// Too few arguments must not read off the end.
+TEST(TaskMapping, ShortArgumentListFallsBack)
+{
+  TempMap file{kHotel};
+  const auto map = TaskMapping::load(file.path());
+
+  EXPECT_EQ(map.outcome_for(*map.action("look_into"), {}), "e-inspect-dry");
+  EXPECT_TRUE(map.waypoint_for(*map.action("goto_zone"), "inspector", {}).empty());
+}
+
+// An action whose destination is an argument names no fixed waypoint, and
+// must not be rejected for it.
+TEST(TaskMapping, ArgumentDrivenMoveNeedsNoFixedWaypoint)
+{
+  TempMap file{kHotel};
+  EXPECT_NO_THROW(TaskMapping::load(file.path()));
 }
 
 int main(int argc, char ** argv)

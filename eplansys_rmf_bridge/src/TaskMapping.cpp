@@ -36,6 +36,12 @@ TaskMapping TaskMapping::load(const std::string & path)
 
   TaskMapping map;
 
+  if (doc.contains("zones")) {
+    for (const auto & [zone, waypoint] : doc.at("zones").items()) {
+      map.zones_.emplace(zone, waypoint.get<std::string>());
+    }
+  }
+
   if (doc.contains("agents")) {
     for (const auto & [name, value] : doc.at("agents").items()) {
       if (!value.is_object() || !value.contains("robot")) {
@@ -64,10 +70,27 @@ TaskMapping TaskMapping::load(const std::string & path)
     spec.category = value.value("category", std::string{"go_to_place"});
     spec.waypoint = value.value("waypoint", std::string{});
     spec.sensing = value.value("sensing", false);
+    spec.waypoint_arg = value.value("waypoint_arg", -1);
+    spec.outcome_arg = value.value("outcome_arg", -1);
     spec.default_outcome = value.value("default_outcome", std::string{});
 
     if (value.contains("orientation")) {
       spec.orientation = value.at("orientation").get<double>();
+    }
+
+    if (value.contains("movements")) {
+      for (const auto & entry : value.at("movements")) {
+        Movement movement;
+        movement.agent_arg = entry.value("agent_arg", 0);
+        movement.waypoint_arg = entry.value("waypoint_arg", 1);
+        spec.movements.push_back(movement);
+      }
+    }
+
+    if (value.contains("outcomes")) {
+      for (const auto & [argument, outcome] : value.at("outcomes").items()) {
+        spec.outcomes.emplace(argument, outcome.get<std::string>());
+      }
     }
 
     if (value.contains("waypoints")) {
@@ -76,9 +99,12 @@ TaskMapping TaskMapping::load(const std::string & path)
       }
     }
 
-    if (!spec.local && spec.waypoint.empty() && spec.waypoints.empty()) {
+    if (!spec.local && spec.waypoint.empty() && spec.waypoints.empty() &&
+      spec.waypoint_arg < 0 && spec.movements.empty())
+    {
       throw std::runtime_error(
-              "action \"" + name + "\" moves a robot but names no waypoint: " + path);
+              "action \"" + name + "\" moves a robot but names no waypoint "
+              "and reads none from its arguments: " + path);
     }
 
     map.actions_.emplace(name, std::move(spec));
@@ -105,14 +131,47 @@ std::optional<ActionSpec> TaskMapping::action(const std::string & name) const
   return it->second;
 }
 
-std::string TaskMapping::waypoint_for(
-  const ActionSpec & spec, const std::string & agent) const
+std::string TaskMapping::waypoint_of_zone(const std::string & zone) const
 {
+  const auto it = zones_.find(zone);
+  return it == zones_.end() ? zone : it->second;
+}
+
+std::string TaskMapping::waypoint_for(
+  const ActionSpec & spec,
+  const std::string & agent,
+  const std::vector<std::string> & arguments) const
+{
+  if (spec.waypoint_arg >= 0) {
+    const auto index = static_cast<std::size_t>(spec.waypoint_arg);
+    if (index >= arguments.size()) {
+      return {};
+    }
+    return waypoint_of_zone(arguments[index]);
+  }
+
   const auto it = spec.waypoints.find(agent);
   if (it != spec.waypoints.end()) {
-    return it->second;
+    return waypoint_of_zone(it->second);
   }
-  return spec.waypoint;
+  return waypoint_of_zone(spec.waypoint);
+}
+
+std::string TaskMapping::outcome_for(
+  const ActionSpec & spec,
+  const std::vector<std::string> & arguments) const
+{
+  if (spec.outcome_arg < 0) {
+    return spec.default_outcome;
+  }
+
+  const auto index = static_cast<std::size_t>(spec.outcome_arg);
+  if (index >= arguments.size()) {
+    return spec.default_outcome;
+  }
+
+  const auto it = spec.outcomes.find(arguments[index]);
+  return it == spec.outcomes.end() ? spec.default_outcome : it->second;
 }
 
 std::vector<std::string> TaskMapping::action_names() const
