@@ -41,7 +41,7 @@ namespace eplansys_rmf_bridge
 class WebsocketFeed
 {
 public:
-  using Callback = std::function<void(const nlohmann::json &)>;
+  using Callback = std::function<void (const nlohmann::json &)>;
 
   /// Binds the port. Throws std::runtime_error if it cannot.
   WebsocketFeed(int port, Callback callback);

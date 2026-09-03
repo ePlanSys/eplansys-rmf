@@ -341,8 +341,8 @@ void RmfTaskClient::on_task_state(const nlohmann::json & state)
     return;
   }
 
-  status.phase = (rmf_status == "completed")
-    ? TaskPhase::Succeeded : TaskPhase::Failed;
+  status.phase = (rmf_status == "completed") ?
+    TaskPhase::Succeeded : TaskPhase::Failed;
   if (status.phase == TaskPhase::Failed) {
     status.error = "RMF reported " + rmf_status;
   }

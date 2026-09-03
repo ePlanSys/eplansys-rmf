@@ -1,18 +1,16 @@
-/*
- * Copyright 2026 Haniel Ulises
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Copyright 2026 Haniel Ulises
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /*
  * Stands in for the RMF api server and reports what a task carries back.
@@ -48,7 +46,8 @@
 #include <nlohmann/json.hpp>
 #include <eplansys_rmf_bridge/WebsocketFeed.hpp>
 
-namespace {
+namespace
+{
 
 std::atomic_bool g_stop{false};
 
@@ -78,10 +77,10 @@ std::string millis_stamp(int64_t unix_millis)
   return ss.str();
 }
 
-bool is_terminal(const std::string& status)
+bool is_terminal(const std::string & status)
 {
   return status == "completed" || status == "failed" ||
-    status == "canceled" || status == "killed" || status == "skipped";
+         status == "canceled" || status == "killed" || status == "skipped";
 }
 
 struct Task
@@ -105,20 +104,23 @@ public:
   {
   }
 
-  void receive(const nlohmann::json& msg)
+  void receive(const nlohmann::json & msg)
   {
-    if (_raw)
+    if (_raw) {
       std::cout << msg.dump(2) << std::endl;
+    }
 
     const auto type_it = msg.find("type");
-    if (type_it == msg.end() || !msg.contains("data"))
+    if (type_it == msg.end() || !msg.contains("data")) {
       return;
+    }
 
     const std::string type = type_it->get<std::string>();
-    if (type == "task_state_update")
+    if (type == "task_state_update") {
       on_task_state(msg.at("data"));
-    else if (type == "task_log_update")
+    } else if (type == "task_log_update") {
       on_task_log(msg.at("data"));
+    }
   }
 
   std::size_t task_count() const
@@ -127,11 +129,10 @@ public:
   }
 
 private:
-  Task& task(const std::string& id)
+  Task & task(const std::string & id)
   {
     auto it = _tasks.find(id);
-    if (it == _tasks.end())
-    {
+    if (it == _tasks.end()) {
       Task t;
       t.id = id;
       it = _tasks.emplace(id, std::move(t)).first;
@@ -141,34 +142,32 @@ private:
     return it->second;
   }
 
-  void on_task_state(const nlohmann::json& state)
+  void on_task_state(const nlohmann::json & state)
   {
-    if (!state.contains("booking") || !state.at("booking").contains("id"))
+    if (!state.contains("booking") || !state.at("booking").contains("id")) {
       return;
+    }
 
     const auto id = state.at("booking").at("id").get<std::string>();
-    auto& t = task(id);
+    auto & t = task(id);
 
-    if (state.contains("category"))
+    if (state.contains("category")) {
       t.category = state.at("category").get<std::string>();
+    }
 
-    if (state.contains("assigned_to"))
-    {
-      const auto& a = state.at("assigned_to");
+    if (state.contains("assigned_to")) {
+      const auto & a = state.at("assigned_to");
       std::string robot = a.value("group", "") + "/" + a.value("name", "");
-      if (robot != t.robot)
-      {
+      if (robot != t.robot) {
         t.robot = robot;
         std::cout << "[" << now_stamp() << "] task " << id
                   << ": assigned to " << robot << std::endl;
       }
     }
 
-    if (state.contains("status"))
-    {
+    if (state.contains("status")) {
       const auto status = state.at("status").get<std::string>();
-      if (status != t.status)
-      {
+      if (status != t.status) {
         std::cout << "[" << now_stamp() << "] task " << id << ": "
                   << (t.status.empty() ? "none" : t.status) << " -> "
                   << status << std::endl;
@@ -179,22 +178,22 @@ private:
     /* Event detail is the tidier of the two carriers: a string the event
      * implementation sets through SimpleEventState::update_detail, forwarded
      * verbatim into every state update. */
-    if (state.contains("phases"))
-    {
-      for (const auto& phase : state.at("phases"))
-      {
-        if (!phase.contains("events"))
+    if (state.contains("phases")) {
+      for (const auto & phase : state.at("phases")) {
+        if (!phase.contains("events")) {
           continue;
+        }
 
-        for (const auto& event : phase.at("events"))
-        {
-          if (!event.contains("detail") || !event.at("detail").is_string())
+        for (const auto & event : phase.at("events")) {
+          if (!event.contains("detail") || !event.at("detail").is_string()) {
             continue;
+          }
 
           const auto detail = event.at("detail").get<std::string>();
           const auto eid = event.value("id", uint64_t{0});
-          if (t.details.count(eid) && t.details.at(eid) == detail)
+          if (t.details.count(eid) && t.details.at(eid) == detail) {
             continue;
+          }
 
           t.details[eid] = detail;
           std::cout << "[" << now_stamp() << "] task " << id << ": event "
@@ -205,77 +204,83 @@ private:
       }
     }
 
-    if (is_terminal(t.status))
+    if (is_terminal(t.status)) {
       report(t);
+    }
   }
 
-  void on_task_log(const nlohmann::json& log)
+  void on_task_log(const nlohmann::json & log)
   {
-    if (!log.contains("task_id"))
+    if (!log.contains("task_id")) {
       return;
-
-    auto& t = task(log.at("task_id").get<std::string>());
-
-    if (log.contains("log"))
-    {
-      for (const auto& entry : log.at("log"))
-        on_log_entry(t, entry, "", "");
     }
 
-    if (!log.contains("phases"))
-      return;
+    auto & t = task(log.at("task_id").get<std::string>());
 
-    for (const auto& [pid, phase] : log.at("phases").items())
-    {
-      if (phase.contains("log"))
-      {
-        for (const auto& entry : phase.at("log"))
+    if (log.contains("log")) {
+      for (const auto & entry : log.at("log")) {
+        on_log_entry(t, entry, "", "");
+      }
+    }
+
+    if (!log.contains("phases")) {
+      return;
+    }
+
+    for (const auto & [pid, phase] : log.at("phases").items()) {
+      if (phase.contains("log")) {
+        for (const auto & entry : phase.at("log")) {
           on_log_entry(t, entry, pid, "");
+        }
       }
 
-      if (!phase.contains("events"))
+      if (!phase.contains("events")) {
         continue;
+      }
 
-      for (const auto& [eid, entries] : phase.at("events").items())
-      {
-        for (const auto& entry : entries)
+      for (const auto & [eid, entries] : phase.at("events").items()) {
+        for (const auto & entry : entries) {
           on_log_entry(t, entry, pid, eid);
+        }
       }
     }
   }
 
   void on_log_entry(
-    Task& t,
-    const nlohmann::json& entry,
-    const std::string& phase,
-    const std::string& event)
+    Task & t,
+    const nlohmann::json & entry,
+    const std::string & phase,
+    const std::string & event)
   {
     const auto seq = entry.value("seq", uint64_t{0});
     const auto key = std::make_tuple(phase, event, seq);
-    if (!t.log_seqs.insert(key).second)
+    if (!t.log_seqs.insert(key).second) {
       return;
+    }
 
     const auto text = entry.value("text", std::string{});
     const auto tier = entry.value("tier", std::string{"info"});
 
     const bool matched = check_outcome(t, text, "log");
-    if (!matched && !_all_logs && tier != "warning" && tier != "error")
+    if (!matched && !_all_logs && tier != "warning" && tier != "error") {
       return;
+    }
 
-    const auto where = event.empty()
-      ? std::string{"task"}
-      : "phase " + phase + " event " + event;
+    const auto where = event.empty() ?
+      std::string{"task"} :
+    "phase " + phase + " event " + event;
 
     std::cout << "[" << millis_stamp(entry.value("unix_millis_time", int64_t{0}))
               << "] task " << t.id << ": " << where << " [" << tier << "] "
               << text << std::endl;
   }
 
-  bool check_outcome(Task& t, const std::string& text, const char* carrier)
+  bool check_outcome(Task & t, const std::string & text, const char * carrier)
   {
     const auto pos = text.find(_outcome_prefix);
-    if (pos == std::string::npos)
+    if (pos == std::string::npos) {
       return false;
+    }
 
     auto token = text.substr(pos + _outcome_prefix.size());
     const auto end = token.find_last_not_of(" \t\r\n");
@@ -287,23 +292,22 @@ private:
     return true;
   }
 
-  void report(const Task& t) const
+  void report(const Task & t) const
   {
     std::cout << "\n  task     " << t.id
               << "\n  category " << t.category;
-    if (!t.robot.empty())
+    if (!t.robot.empty()) {
       std::cout << "\n  robot    " << t.robot;
+    }
     std::cout << "\n  status   " << t.status;
 
-    if (t.outcomes.empty())
-    {
+    if (t.outcomes.empty()) {
       std::cout << "\n  outcome  none, no value carried \""
                 << _outcome_prefix << "\"";
-    }
-    else
-    {
-      for (const auto& [carrier, token] : t.outcomes)
+    } else {
+      for (const auto & [carrier, token] : t.outcomes) {
         std::cout << "\n  outcome  \"" << token << "\" (via " << carrier << ")";
+      }
     }
     std::cout << "\n" << std::endl;
   }
@@ -316,26 +320,24 @@ private:
 
 }  // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char ** argv)
 {
   int port = 7879;
   std::string outcome_prefix = "eplansys.outcome=";
   bool all_logs = false;
   bool raw = false;
 
-  for (int i = 1; i < argc; ++i)
-  {
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--port" && i + 1 < argc)
+    if (arg == "--port" && i + 1 < argc) {
       port = std::stoi(argv[++i]);
-    else if (arg == "--outcome-prefix" && i + 1 < argc)
+    } else if (arg == "--outcome-prefix" && i + 1 < argc) {
       outcome_prefix = argv[++i];
-    else if (arg == "--all-logs")
+    } else if (arg == "--all-logs") {
       all_logs = true;
-    else if (arg == "--raw")
+    } else if (arg == "--raw") {
       raw = true;
-    else if (arg == "-h" || arg == "--help")
-    {
+    } else if (arg == "-h" || arg == "--help") {
       std::cout <<
         "usage: state_probe [--port N] [--outcome-prefix S] [--all-logs] [--raw]\n"
         "\n"
@@ -347,9 +349,7 @@ int main(int argc, char** argv)
         "                    errors and outcomes.\n"
         "  --raw             dump every frame as received.\n";
       return 0;
-    }
-    else
-    {
+    } else {
       std::cerr << "unrecognised argument: " << arg << std::endl;
       return 1;
     }
@@ -373,8 +373,9 @@ int main(int argc, char** argv)
             << "\n[" << now_stamp() << "] launch the fleet adapter with "
             << "server_uri:=\"ws://localhost:" << port << "\"" << std::endl;
 
-  while (!g_stop)
+  while (!g_stop) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
 
   feed.stop();
   std::cout << "\n[" << now_stamp() << "] saw " << probe.task_count()

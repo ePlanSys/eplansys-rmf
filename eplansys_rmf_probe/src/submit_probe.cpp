@@ -1,18 +1,16 @@
-/*
- * Copyright 2026 Haniel Ulises
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Copyright 2026 Haniel Ulises
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /*
  * Submits one RMF task bound to a named robot.
@@ -40,18 +38,20 @@
 #include <rmf_task_msgs/msg/api_request.hpp>
 #include <rmf_task_msgs/msg/api_response.hpp>
 
-namespace {
+namespace
+{
 
 std::string make_request_id()
 {
-  static const char* digits = "0123456789abcdef";
+  static const char * digits = "0123456789abcdef";
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> dist(0, 15);
 
   std::string id = "eplansys_probe_";
-  for (int i = 0; i < 16; ++i)
+  for (int i = 0; i < 16; ++i) {
     id.push_back(digits[dist(gen)]);
+  }
   return id;
 }
 
@@ -81,32 +81,28 @@ void usage()
 
 }  // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char ** argv)
 {
   Options opt;
 
-  for (int i = 1; i < argc; ++i)
-  {
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if ((arg == "-F" || arg == "--fleet") && i + 1 < argc)
+    if ((arg == "-F" || arg == "--fleet") && i + 1 < argc) {
       opt.fleet = argv[++i];
-    else if ((arg == "-R" || arg == "--robot") && i + 1 < argc)
+    } else if ((arg == "-R" || arg == "--robot") && i + 1 < argc) {
       opt.robot = argv[++i];
-    else if ((arg == "-p" || arg == "--place") && i + 1 < argc)
+    } else if ((arg == "-p" || arg == "--place") && i + 1 < argc) {
       opt.place = argv[++i];
-    else if ((arg == "-o" || arg == "--orient") && i + 1 < argc)
+    } else if ((arg == "-o" || arg == "--orient") && i + 1 < argc) {
       opt.orientation = std::stod(argv[++i]);
-    else if (arg == "--dispatch")
+    } else if (arg == "--dispatch") {
       opt.dispatch = true;
-    else if (arg == "--timeout" && i + 1 < argc)
+    } else if (arg == "--timeout" && i + 1 < argc) {
       opt.timeout = std::stod(argv[++i]);
-    else if (arg == "-h" || arg == "--help")
-    {
+    } else if (arg == "-h" || arg == "--help") {
       usage();
       return 0;
-    }
-    else
-    {
+    } else {
       std::cerr << "unrecognised argument: " << arg << std::endl;
       usage();
       return 1;
@@ -128,15 +124,17 @@ int main(int argc, char** argv)
     [&response, &request_id](
       const rmf_task_msgs::msg::ApiResponse::SharedPtr msg)
     {
-      if (msg->request_id != request_id)
+      if (msg->request_id != request_id) {
         return;
+      }
       response = nlohmann::json::parse(msg->json_msg, nullptr, false);
     });
 
   nlohmann::json go_to;
   go_to["waypoint"] = opt.place;
-  if (opt.orientation.has_value())
+  if (opt.orientation.has_value()) {
     go_to["orientation"] = *opt.orientation * M_PI / 180.0;
+  }
 
   nlohmann::json activity;
   activity["category"] = "go_to_place";
@@ -158,21 +156,18 @@ int main(int argc, char** argv)
   request["requester"] = "eplansys_rmf_probe";
 
   nlohmann::json payload;
-  if (opt.dispatch)
-  {
+  if (opt.dispatch) {
     payload["type"] = "dispatch_task_request";
-  }
-  else
-  {
+  } else {
     payload["type"] = "robot_task_request";
     payload["fleet"] = opt.fleet;
     payload["robot"] = opt.robot;
   }
   payload["request"] = request;
 
-  const std::string target = opt.dispatch
-    ? "whichever fleet wins the bid"
-    : opt.fleet + "/" + opt.robot;
+  const std::string target = opt.dispatch ?
+    "whichever fleet wins the bid" :
+    opt.fleet + "/" + opt.robot;
 
   std::cout << "submitting " << payload["type"].get<std::string>()
             << " to " << target
@@ -200,34 +195,25 @@ int main(int argc, char** argv)
   }
 
   int code = 0;
-  if (!response.has_value())
-  {
+  if (!response.has_value()) {
     std::cout << "no response within " << opt.timeout << "s.\n"
               << "the fleet adapter may be down, or the fleet name wrong."
               << std::endl;
     code = 1;
-  }
-  else if (response->is_discarded())
-  {
+  } else if (response->is_discarded()) {
     std::cout << "response was not valid JSON." << std::endl;
     code = 1;
-  }
-  else
-  {
+  } else {
     std::cout << "response:\n" << response->dump(2) << "\n" << std::endl;
 
-    if (!response->value("success", false))
-    {
+    if (!response->value("success", false)) {
       std::cout << "rejected." << std::endl;
-      for (const auto& e : response->value("errors", nlohmann::json::array()))
-      {
+      for (const auto & e : response->value("errors", nlohmann::json::array())) {
         std::cout << "  " << e.value("code", 0) << ": "
                   << e.value("detail", std::string{"?"}) << std::endl;
       }
       code = 1;
-    }
-    else
-    {
+    } else {
       const auto id = response->value("state", nlohmann::json::object())
         .value("booking", nlohmann::json::object())
         .value("id", std::string{"?"});

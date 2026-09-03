@@ -25,7 +25,8 @@
 
 using eplansys_rmf_bridge::TaskMapping;
 
-namespace {
+namespace
+{
 
 class TempMap
 {
@@ -53,7 +54,8 @@ private:
   std::string path_;
 };
 
-const char * kHotel = R"({
+const char * kHotel =
+  R"({
   "zones": {
     "lobby": "lobby",
     "l2_suite": "L2_master_suite",
@@ -71,7 +73,8 @@ const char * kHotel = R"({
   }
 })";
 
-const char * kSurvey = R"({
+const char * kSurvey =
+  R"({
   "agents": {
     "scout": {"fleet": "tinyRobot", "robot": "tinyRobot1"},
     "relay": {"fleet": "tinyRobot", "robot": "tinyRobot2"}

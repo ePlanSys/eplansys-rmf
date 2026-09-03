@@ -249,9 +249,9 @@ private:
     }
 
     send_feedback(
-      request_ids_.empty()
-      ? 0.5f
-      : static_cast<float>(finished) / static_cast<float>(request_ids_.size()),
+      request_ids_.empty() ?
+      0.5f :
+      static_cast<float>(finished) / static_cast<float>(request_ids_.size()),
       last_status.empty() ? "submitted" : last_status);
   }
 
