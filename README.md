@@ -162,6 +162,12 @@ the demo; its `humble` branch is the one to use.
 - [eplansys](https://github.com/ePlanSys/eplansys)
 - [Open-RMF](https://github.com/open-rmf)
 
+## Contributing
+
+The tree follows the ament default style rather than Open-RMF's, and the CI
+lint job is reproducible locally in three commands. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Licence
 
 Apache-2.0
