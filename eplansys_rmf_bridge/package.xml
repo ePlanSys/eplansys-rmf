@@ -17,6 +17,7 @@
   <exec_depend>plansys2_executor</exec_depend>
   <build_depend>plansys2_msgs</build_depend>
   <exec_depend>plansys2_msgs</exec_depend>
+  <depend>std_msgs</depend>
   <depend>rmf_task_msgs</depend>
   <depend>rmf_fleet_msgs</depend>
   <depend>libwebsocketpp-dev</depend>

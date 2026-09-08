@@ -19,12 +19,15 @@
 
     "relay": {
       "local": true,
-      "duration": 2.0
+      "duration": 2.0,
+      "channel": "private",
+      "listener_arg": 1
     },
 
     "broadcast": {
       "local": true,
-      "duration": 2.0
+      "duration": 2.0,
+      "channel": "public"
     }
   }
 }

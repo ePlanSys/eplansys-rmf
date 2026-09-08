@@ -238,3 +238,66 @@ int main(int argc, char ** argv)
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+TEST(TaskMapping, SpeechActCarriesItsAudience)
+{
+  TempMap file{
+    R"({
+  "agents": {"scout": {"fleet": "f", "robot": "r"}},
+  "actions": {
+    "relay": {"local": true, "channel": "private", "listener_arg": 1},
+    "broadcast": {"local": true, "channel": "public"}
+  }
+})"};
+  const auto map = TaskMapping::load(file.path());
+
+  const auto relay = map.action("relay");
+  ASSERT_TRUE(relay.has_value());
+  EXPECT_EQ(relay->channel, "private");
+  EXPECT_EQ(relay->listener_arg, 1);
+
+  const auto broadcast = map.action("broadcast");
+  ASSERT_TRUE(broadcast.has_value());
+  EXPECT_EQ(broadcast->channel, "public");
+}
+
+TEST(TaskMapping, SpeechActWithoutAChannelReachesNobody)
+{
+  TempMap file{kSurvey};
+  const auto relay = TaskMapping::load(file.path()).action("relay");
+  ASSERT_TRUE(relay.has_value());
+  EXPECT_TRUE(relay->local);
+  EXPECT_TRUE(relay->channel.empty());
+}
+
+TEST(TaskMapping, UnknownChannelIsRejected)
+{
+  TempMap file{
+    R"({
+  "agents": {"scout": {"fleet": "f", "robot": "r"}},
+  "actions": {"mutter": {"local": true, "channel": "semi-private"}}
+})"};
+  EXPECT_THROW(TaskMapping::load(file.path()), std::runtime_error);
+}
+
+// A channel says who hears the action. An action that moves a robot says
+// nothing, so the two together would answer a question the domain never asked.
+TEST(TaskMapping, ChannelOnAMovingActionIsRejected)
+{
+  TempMap file{
+    R"({
+  "agents": {"scout": {"fleet": "f", "robot": "r"}},
+  "actions": {"goto_site": {"waypoint": "pantry", "channel": "public"}}
+})"};
+  EXPECT_THROW(TaskMapping::load(file.path()), std::runtime_error);
+}
+
+TEST(TaskMapping, PrivateChannelNeedsSomebodyToBePrivateTo)
+{
+  TempMap file{
+    R"({
+  "agents": {"scout": {"fleet": "f", "robot": "r"}},
+  "actions": {"relay": {"local": true, "channel": "private", "listener_arg": -1}}
+})"};
+  EXPECT_THROW(TaskMapping::load(file.path()), std::runtime_error);
+}

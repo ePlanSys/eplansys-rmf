@@ -73,6 +73,8 @@ TaskMapping TaskMapping::load(const std::string & path)
     spec.waypoint_arg = value.value("waypoint_arg", -1);
     spec.outcome_arg = value.value("outcome_arg", -1);
     spec.default_outcome = value.value("default_outcome", std::string{});
+    spec.channel = value.value("channel", std::string{});
+    spec.listener_arg = value.value("listener_arg", 1);
 
     if (value.contains("orientation")) {
       spec.orientation = value.at("orientation").get<double>();
@@ -105,6 +107,27 @@ TaskMapping TaskMapping::load(const std::string & path)
       throw std::runtime_error(
               "action \"" + name + "\" moves a robot but names no waypoint "
               "and reads none from its arguments: " + path);
+    }
+
+    if (!spec.channel.empty() && spec.channel != "public" && spec.channel != "private") {
+      throw std::runtime_error(
+              "action \"" + name + "\" declares channel \"" + spec.channel +
+              "\", which is neither \"public\" nor \"private\": " + path);
+    }
+
+    // A channel says who hears the action, and an action that moves a robot
+    // says nothing at all. Letting the two combine would quietly answer a
+    // question the domain has not asked.
+    if (!spec.channel.empty() && !spec.local) {
+      throw std::runtime_error(
+              "action \"" + name + "\" declares a channel but is not local. "
+              "Only a speech act has an audience: " + path);
+    }
+
+    if (spec.channel == "private" && spec.listener_arg < 0) {
+      throw std::runtime_error(
+              "action \"" + name + "\" is private but names no listener "
+              "argument, so there is nobody for it to be private to: " + path);
     }
 
     map.actions_.emplace(name, std::move(spec));

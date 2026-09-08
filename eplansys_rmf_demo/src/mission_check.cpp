@@ -31,15 +31,27 @@
 // It runs after the mission process exits and before the launch file shuts the
 // system down, which is the only window in which the executor is finished and
 // the state node is still alive.
+//
+// There are two kinds of claim here, and they are worth keeping apart. Asking
+// the epistemic state settles where the model ended up, which is a statement
+// about what the mission believes. Reading the agents' radio transcripts
+// settles who was actually spoken to, which is a statement about what was
+// published and received. The second is the weaker claim and the harder one to
+// fake: an observer whose transcript is empty was on nobody's channel.
 
+#include <algorithm>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "nlohmann/json.hpp"
+
 #include "plansys2_epistemic_executor/EpistemicStateClient.hpp"
 
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 
 using namespace std::chrono_literals;   // NOLINT (build/namespaces)
 
@@ -89,6 +101,77 @@ Check ask(
   return check;
 }
 
+/// A formula nobody could be asked about.
+Check unreachable(const std::string & formula, bool expected)
+{
+  Check check;
+  check.formula = formula;
+  check.expected = expected;
+  check.error = "the epistemic state is not up";
+  return check;
+}
+
+/// What one agent's radio recorded, or nothing if it never said.
+///
+/// A radio latches its transcript, so a subscriber that arrives after the
+/// mission still receives it. A transcript that does not arrive at all is a
+/// radio that was not running, which is not the same as an agent that heard
+/// nothing and is not reported as one.
+struct Transcript
+{
+  bool arrived{false};
+  std::size_t utterances{0};
+};
+
+/// Collect the latched transcripts of the agents named.
+std::map<std::string, Transcript> transcripts(
+  const rclcpp::Node::SharedPtr & node,
+  const std::string & prefix,
+  const std::vector<std::string> & agents,
+  const std::chrono::nanoseconds & patience)
+{
+  std::map<std::string, Transcript> out;
+  std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions;
+
+  // Depth one, matching the radios: a transcript is republished whenever it
+  // grows, and only its latest revision is retained, so whatever arrives is
+  // current by construction.
+  rclcpp::QoS qos(1);
+  qos.reliable().transient_local();
+
+  for (const auto & agent : agents) {
+    out[agent] = Transcript{};
+    subscriptions.push_back(
+      node->create_subscription<std_msgs::msg::String>(
+        prefix + "/heard/" + agent, qos,
+        [&out, agent](const std_msgs::msg::String::SharedPtr message) {
+          const auto parsed = nlohmann::json::parse(message->data, nullptr, false);
+          if (parsed.is_discarded() || !parsed.contains("heard")) {
+            return;
+          }
+          out[agent].arrived = true;
+          out[agent].utterances = parsed.at("heard").size();
+        }));
+  }
+
+  // A latched message arrives once the subscription has matched, which is not
+  // instant. Spinning until every transcript is in, or until patience runs
+  // out, is the difference between reading a transcript and reading a race.
+  const auto deadline = node->now() + rclcpp::Duration(patience);
+  while (rclcpp::ok() && node->now() < deadline) {
+    rclcpp::spin_some(node);
+    const auto missing = std::count_if(
+      out.begin(), out.end(),
+      [](const auto & entry) {return !entry.second.arrived;});
+    if (missing == 0) {
+      break;
+    }
+    std::this_thread::sleep_for(50ms);
+  }
+
+  return out;
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
@@ -111,32 +194,59 @@ int main(int argc, char ** argv)
     "(Kw observer contaminated)",
   });
 
+  // The other half of the mission's claim, and the physical one: who was
+  // actually spoken to. `observer` is on no private channel, so its radio
+  // should have recorded nothing at all.
+  //
+  // `scout` is the one spoken to, which is worth reading twice. The planner
+  // sends the *relay* agent to the site and has it scan, and the speaker of a
+  // private announcement is its first argument: the solution is
+  // `relay-dirty_relay_scout`, so the agent named `relay` tells the agent
+  // named `scout`. The names describe the roles the mission was written
+  // around, not the roles the planner assigned.
+  node->declare_parameter("heard_something", std::vector<std::string>{"scout"});
+  node->declare_parameter("heard_nothing", std::vector<std::string>{"observer"});
+  node->declare_parameter("channel_prefix", std::string{"/eplansys/channel"});
+
   const auto must_hold = node->get_parameter("must_hold").as_string_array();
   const auto must_not_hold = node->get_parameter("must_not_hold").as_string_array();
+  const auto heard_something = node->get_parameter("heard_something").as_string_array();
+  const auto heard_nothing = node->get_parameter("heard_nothing").as_string_array();
+  auto prefix = node->get_parameter("channel_prefix").as_string();
+  if (!prefix.empty() && prefix.back() == '/') {
+    prefix.pop_back();
+  }
 
-  if (must_hold.empty() && must_not_hold.empty()) {
-    RCLCPP_WARN(node->get_logger(), "no formulas to check");
+  if (must_hold.empty() && must_not_hold.empty() &&
+    heard_something.empty() && heard_nothing.empty())
+  {
+    RCLCPP_WARN(node->get_logger(), "nothing to check");
     rclcpp::shutdown();
     return 0;
   }
 
   auto state = std::make_shared<plansys2::EpistemicStateClient>("mission_check_state_client");
 
-  if (!state->available(10s)) {
+  // An unreachable state fails every formula as unchecked and stops nothing
+  // else. The transcripts are read off the radios and have no more to do with
+  // the epistemic state than the fleet does, so a state node that never came up
+  // must not take the answer to "who was spoken to" down with it.
+  const bool nothing_to_ask = must_hold.empty() && must_not_hold.empty();
+  const bool state_up = nothing_to_ask || state->available(10s);
+
+  if (!state_up) {
     RCLCPP_ERROR(
       node->get_logger(),
-      "the epistemic state is not up, so the mission cannot be checked. Nothing "
-      "is concluded about the goal either way.");
-    rclcpp::shutdown();
-    return 1;
+      "the epistemic state is not up, so nothing is concluded about the goal "
+      "either way. What was said is still checked below.");
   }
 
   std::vector<Check> checks;
   for (const auto & formula : must_hold) {
-    checks.push_back(ask(state, formula, true));
+    checks.push_back(state_up ? ask(state, formula, true) : unreachable(formula, true));
   }
   for (const auto & formula : must_not_hold) {
-    checks.push_back(ask(state, formula, false));
+    checks.push_back(state_up ? ask(state, formula, false) : unreachable(formula, false));
   }
 
   std::size_t failed = 0;
@@ -162,14 +272,71 @@ int main(int argc, char ** argv)
       check.formula.c_str(), claim, check.holds ? "holds" : "does not hold");
   }
 
+  // Who was actually spoken to. This is checked even when the formulas above
+  // failed, because the two answer different questions and a mission that
+  // ended in the wrong model may still have used the right channel.
+  std::vector<std::string> listeners;
+  listeners.insert(listeners.end(), heard_something.begin(), heard_something.end());
+  listeners.insert(listeners.end(), heard_nothing.begin(), heard_nothing.end());
+
+  std::size_t radios = 0;
+  if (!listeners.empty()) {
+    const auto recorded = transcripts(node, prefix, listeners, 5s);
+
+    for (const auto & agent : heard_something) {
+      ++radios;
+      const auto & transcript = recorded.at(agent);
+      if (!transcript.arrived) {
+        ++failed;
+        RCLCPP_ERROR(
+          node->get_logger(),
+          "UNCHECKED %s was to have been spoken to: no transcript, so its radio "
+          "was not running", agent.c_str());
+      } else if (transcript.utterances == 0) {
+        ++failed;
+        RCLCPP_ERROR(
+          node->get_logger(), "FAIL %s was to have been spoken to, and heard nothing",
+          agent.c_str());
+      } else {
+        RCLCPP_INFO(
+          node->get_logger(), "ok   %s was spoken to, %zu time(s)",
+          agent.c_str(), transcript.utterances);
+      }
+    }
+
+    for (const auto & agent : heard_nothing) {
+      ++radios;
+      const auto & transcript = recorded.at(agent);
+      if (!transcript.arrived) {
+        ++failed;
+        RCLCPP_ERROR(
+          node->get_logger(),
+          "UNCHECKED %s was to have been spoken to by nobody: no transcript, so "
+          "its radio was not running and its silence proves nothing",
+          agent.c_str());
+      } else if (transcript.utterances > 0) {
+        ++failed;
+        RCLCPP_ERROR(
+          node->get_logger(),
+          "FAIL %s was to have been spoken to by nobody, and heard %zu utterance(s)",
+          agent.c_str(), transcript.utterances);
+      } else {
+        RCLCPP_INFO(
+          node->get_logger(), "ok   %s was spoken to by nobody", agent.c_str());
+      }
+    }
+  }
+
   if (failed == 0) {
     RCLCPP_INFO(
       node->get_logger(),
-      "the mission came out as specified: %zu formulas checked against the "
-      "state the fleet left behind.", checks.size());
+      "the mission came out as specified: %zu formulas against the state the "
+      "fleet left behind, and %zu transcript(s) of who was spoken to.",
+      checks.size(), radios);
   } else {
     RCLCPP_ERROR(
-      node->get_logger(), "%zu of %zu checks did not pass", failed, checks.size());
+      node->get_logger(), "%zu of %zu checks did not pass",
+      failed, checks.size() + radios);
   }
 
   rclcpp::shutdown();

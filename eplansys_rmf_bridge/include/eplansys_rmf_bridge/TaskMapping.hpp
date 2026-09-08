@@ -62,6 +62,20 @@ struct ActionSpec
   /// Seconds a local action takes. Purely for the look of the thing.
   double duration{1.0};
 
+  /// Which audience a speech act reaches: empty for none, "public" for
+  /// everyone, "private" for one named listener.
+  ///
+  /// This is what tells the two speech acts of the survey apart at execution.
+  /// Without it a private announcement and a public one are the same pause,
+  /// and the observability conditions the planner reasoned about have no
+  /// counterpart in anything that happens.
+  std::string channel;
+
+  /// Index into the arguments naming the listener of a private announcement.
+  /// `(relay relay scout)` takes 2, since the acting agent is argument 1 and
+  /// argument 0 names nothing here. Ignored for a public channel.
+  int listener_arg{1};
+
   /// RMF task category. Only go_to_place is handled today.
   std::string category{"go_to_place"};
 

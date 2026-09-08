@@ -104,8 +104,28 @@ arguments, so a map keyed on grounded names could not be consulted here. The
 two files answer different questions at different times, and collapsing them
 would mean the bridge could not look anything up.
 
-The bridge's map binds agents to robots and says where each action sends one.
+The bridge's map binds agents to robots and says where each action sends one,
+and for a speech act which audience it reaches.
 `eplansys_rmf_demo/config/office_survey.json` is the worked example.
+
+### 4. Speech acts
+
+A private announcement and a public one differ only in who hears them, and
+executing both as the same pause discards the one thing the survey domain is
+about. **The map names the audience**, and the bridge puts the utterance on a
+topic whose subscribers are that audience: `public` reaches every agent,
+`private` reaches the listener the action names and nobody else.
+
+This realises the addressing and not the confidentiality. Any node may
+subscribe to a private topic, so what the demo establishes is that the team
+used a channel the observer was not on. Enforcing that it could not have
+listened is a DDS partition or an SROS 2 permission, built out of these same
+audiences, and belongs to a deployment rather than to the bridge.
+
+The utterance carries the outcome the speaker's own sensing action reported,
+because that is all that is left: `eplansys`'s action map sends `relay-dirty`
+and `relay-clean` alike to `(relay ?i ?j)`, so a performer cannot tell from its
+arguments which of the two it is saying.
 
 ## Packages
 
@@ -115,9 +135,10 @@ The bridge's map binds agents to robots and says where each action sends one.
 | `eplansys_rmf_demo` | the survey mission over an RMF fleet |
 | `eplansys_rmf_probe` | diagnostics: submit one task, and watch what returns |
 
-`eplansys_rmf_demo` also holds `mission_check`, which asks the epistemic state
-once the robots have stopped whether the goal actually came out, the observer's
-ignorance included.
+`eplansys_rmf_demo` also holds `radio`, one agent's ears on the speech-act
+channels, and `mission_check`, which asks once the robots have stopped whether
+the goal actually came out --- of the epistemic state, and of the transcripts
+of who was spoken to.
 
 ## Reference scenario
 
@@ -145,8 +166,8 @@ different branch for each: `relay-dirty_relay_scout` against
 
 `rmf:=false` leaves the fleet to another terminal, and `headless:=true` runs
 Gazebo without a window. When the robots stop, `mission_check` puts the goal's
-three conjuncts to the epistemic state and reports on each; `check:=false`
-leaves it out.
+three conjuncts to the epistemic state, and reads the agents' radio transcripts
+to see who was actually spoken to; `check:=false` leaves it out.
 
 ## Building
 

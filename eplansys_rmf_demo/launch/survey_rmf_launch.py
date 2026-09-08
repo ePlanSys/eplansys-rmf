@@ -19,9 +19,11 @@ The site survey over an Open-RMF fleet.
     ros2 launch eplansys_rmf_demo survey_rmf_launch.py site:=clean
     ros2 launch eplansys_rmf_demo survey_rmf_launch.py rmf:=false
 
-When the robots have stopped, `mission_check` asks the epistemic state whether
-the mission came out the way the goal asked, the observer's ignorance included.
-`check:=false` leaves it out.
+Each agent runs a `radio` on the speech-act channels, so who was spoken to is
+recorded rather than assumed. When the robots have stopped, `mission_check`
+asks the epistemic state whether the mission came out the way the goal asked
+and reads those transcripts to see who actually heard anything.
+`check:=false` leaves both out.
 
 The mission, the EPDDL and the policy are `eplansys_demo`'s. What this file
 changes is the performers: instead of waiting out a duration, they submit RMF
@@ -63,6 +65,12 @@ OUTCOMES = {
 }
 
 WEBSOCKET_PORT = 7879
+
+# Every agent of the mission, including the one the goal excludes. `observer`
+# runs a radio precisely so that its silence is recorded rather than assumed.
+AGENTS = ('scout', 'relay', 'observer')
+
+CHANNEL_PREFIX = '/eplansys/channel'
 
 
 def launch_setup(context, *args, **kwargs):
@@ -123,7 +131,25 @@ def launch_setup(context, *args, **kwargs):
             'task_map': map_file.name,
             'websocket_port': WEBSOCKET_PORT,
             'task_timeout': 180.0,
+            'channel_prefix': CHANNEL_PREFIX,
         }])
+
+    # One pair of ears per agent, up before anything is said. A speech act is
+    # published once, and although the channels are latched so a late listener
+    # still hears, a radio that starts first is the honest arrangement: the
+    # transcript then records what was heard rather than what was replayed.
+    radios = [
+        Node(
+            package='eplansys_rmf_demo',
+            executable='radio',
+            name=f'radio_{agent}',
+            output='screen',
+            parameters=[{
+                'agent': agent,
+                'channel_prefix': CHANNEL_PREFIX,
+            }])
+        for agent in AGENTS
+    ]
 
     mission = Node(
         package='eplansys_demo',
@@ -156,7 +182,8 @@ def launch_setup(context, *args, **kwargs):
         package='eplansys_rmf_demo',
         executable='mission_check',
         name='mission_check',
-        output='screen')
+        output='screen',
+        parameters=[{'channel_prefix': CHANNEL_PREFIX}])
 
     checking = LaunchConfiguration('check').perform(context).lower() in ('true', '1')
 
@@ -171,7 +198,7 @@ def launch_setup(context, *args, **kwargs):
                 target_action=check if checking else mission,
                 on_exit=[EmitEvent(event=Shutdown())])))
 
-    return [fleet, plansys2, bridge, mission, *staged]
+    return [fleet, plansys2, bridge, *radios, mission, *staged]
 
 
 def generate_launch_description():

@@ -16,6 +16,7 @@ find_package(rclcpp REQUIRED)
 # Open-RMF and no eplansys, which is what CI has.
 find_package(plansys2_executor QUIET)
 find_package(plansys2_msgs QUIET)
+find_package(std_msgs REQUIRED)
 find_package(rmf_task_msgs REQUIRED)
 find_package(rmf_fleet_msgs REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
@@ -26,6 +27,7 @@ add_library(${PROJECT_NAME} SHARED
   src/TaskMapping.cpp
   src/RmfTaskClient.cpp
   src/WebsocketFeed.cpp
+  src/Announcer.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -36,6 +38,7 @@ target_link_libraries(${PROJECT_NAME}
   nlohmann_json::nlohmann_json
   Boost::system
   pthread
+  ${std_msgs_TARGETS}
   ${rmf_task_msgs_TARGETS}
   ${rmf_fleet_msgs_TARGETS}
 )

@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "eplansys_rmf_bridge/Announcer.hpp"
 #include "eplansys_rmf_bridge/RmfTaskClient.hpp"
 #include "eplansys_rmf_bridge/TaskMapping.hpp"
 
@@ -50,12 +51,14 @@ public:
     ActionSpec spec,
     std::shared_ptr<TaskMapping> mapping,
     std::shared_ptr<RmfTaskClient> client,
+    std::shared_ptr<Announcer> announcer,
     double timeout)
   : ActionExecutorClient(node_name),
     action_(action),
     spec_(std::move(spec)),
     mapping_(std::move(mapping)),
     client_(std::move(client)),
+    announcer_(std::move(announcer)),
     timeout_(timeout)
   {
     set_parameter(rclcpp::Parameter("action_name", action));
@@ -193,7 +196,65 @@ private:
         static_cast<float>(elapsed / spec_.duration), "speaking");
       return;
     }
+    speak();
     conclude(true, "done", resolve_outcome(""));
+  }
+
+  /// The listener of a private announcement, from the argument the map names.
+  std::string listener() const
+  {
+    const auto & args = get_arguments();
+    const auto index = static_cast<std::size_t>(spec_.listener_arg);
+    if (spec_.listener_arg < 0 || index >= args.size()) {
+      return {};
+    }
+    return args[index];
+  }
+
+  /// Put the utterance on the channel the action declared.
+  ///
+  /// What it carries is the outcome the speaker's own sensing action reported,
+  /// because that is the only form of the finding still available. eplansys's
+  /// action map sends `relay-dirty` and `relay-clean` alike to `(relay ?i ?j)`,
+  /// so a performer cannot tell from its own arguments which of the two is
+  /// being said. The scan that produced the finding did report it, and the
+  /// announcer kept it.
+  void speak()
+  {
+    if (spec_.channel.empty() || !announcer_) {
+      return;
+    }
+
+    const auto speaker = acting_agent();
+    if (speaker.empty()) {
+      RCLCPP_ERROR(get_logger(), "%s: no speaker argument", action_.c_str());
+      return;
+    }
+
+    const auto content = announcer_->last_observed(speaker);
+    if (content.empty()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "%s: %s has sensed nothing, so the utterance carries no finding. The "
+        "channel is still the one the policy chose.",
+        action_.c_str(), speaker.c_str());
+    }
+
+    if (spec_.channel == "public") {
+      announcer_->say_public(speaker, action_, content);
+      return;
+    }
+
+    const auto heard_by = listener();
+    if (heard_by.empty()) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "%s: private announcement with no listener at argument %d, so there "
+        "is nobody to say it to and nothing is sent.",
+        action_.c_str(), spec_.listener_arg);
+      return;
+    }
+    announcer_->say_private(speaker, heard_by, action_, content);
   }
 
   void run_task()
@@ -268,6 +329,7 @@ private:
     if (!carried.empty()) {
       RCLCPP_INFO(
         get_logger(), "%s: observed %s", action_.c_str(), carried.c_str());
+      remember(carried);
       return carried;
     }
 
@@ -287,7 +349,17 @@ private:
       "%s: RMF carried no outcome, falling back to the map's \"%s\". "
       "A fleet adapter reporting what it sensed would override this.",
       action_.c_str(), configured.c_str());
+    remember(configured);
     return configured;
+  }
+
+  /// Keep what the acting agent sensed, so that a later speech act by the same
+  /// agent has a finding to carry.
+  void remember(const std::string & outcome)
+  {
+    if (announcer_) {
+      announcer_->observed(acting_agent(), outcome);
+    }
   }
 
   void conclude(bool success, const std::string & status, const std::string & outcome)
@@ -301,6 +373,7 @@ private:
   ActionSpec spec_;
   std::shared_ptr<TaskMapping> mapping_;
   std::shared_ptr<RmfTaskClient> client_;
+  std::shared_ptr<Announcer> announcer_;
   double timeout_;
 
   bool started_{false};
@@ -319,12 +392,14 @@ int main(int argc, char ** argv)
   config->declare_parameter("websocket_port", 7879);
   config->declare_parameter("outcome_prefix", std::string{"eplansys.outcome="});
   config->declare_parameter("task_timeout", 120.0);
+  config->declare_parameter("channel_prefix", std::string{"/eplansys/channel"});
 
   const auto task_map = config->get_parameter("task_map").as_string();
   const auto port = static_cast<int>(
     config->get_parameter("websocket_port").as_int());
   const auto prefix = config->get_parameter("outcome_prefix").as_string();
   const auto timeout = config->get_parameter("task_timeout").as_double();
+  const auto channel_prefix = config->get_parameter("channel_prefix").as_string();
 
   if (task_map.empty()) {
     RCLCPP_FATAL(
@@ -346,6 +421,11 @@ int main(int argc, char ** argv)
   auto client = std::make_shared<eplansys_rmf_bridge::RmfTaskClient>(
     config, port, prefix);
 
+  // Shared, like the task client: what the scout sensed is what the scout's
+  // later relay says, and those are two performers.
+  auto announcer = std::make_shared<eplansys_rmf_bridge::Announcer>(
+    config, channel_prefix);
+
   // One process for every performer: they share the websocket the fleet
   // adapter dials, and a port can only be bound once.
   std::vector<std::shared_ptr<eplansys_rmf_bridge::RmfAction>> actions;
@@ -353,10 +433,15 @@ int main(int argc, char ** argv)
     const auto spec = mapping->action(name);
     actions.push_back(
       std::make_shared<eplansys_rmf_bridge::RmfAction>(
-        name + "_rmf_node", name, *spec, mapping, client, timeout));
-    RCLCPP_INFO(
-      config->get_logger(), "performer for \"%s\"%s", name.c_str(),
-      spec->local ? " (speech act, no RMF task)" : "");
+        name + "_rmf_node", name, *spec, mapping, client, announcer, timeout));
+
+    std::string how = spec->local ? " (speech act, no RMF task)" : "";
+    if (spec->channel == "public") {
+      how = " (speech act, heard on " + announcer->public_topic() + ")";
+    } else if (spec->channel == "private") {
+      how = " (speech act, heard by its listener alone)";
+    }
+    RCLCPP_INFO(config->get_logger(), "performer for \"%s\"%s", name.c_str(), how.c_str());
   }
 
   rclcpp::executors::MultiThreadedExecutor executor;
