@@ -115,6 +115,10 @@ The bridge's map binds agents to robots and says where each action sends one.
 | `eplansys_rmf_demo` | the survey mission over an RMF fleet |
 | `eplansys_rmf_probe` | diagnostics: submit one task, and watch what returns |
 
+`eplansys_rmf_demo` also holds `mission_check`, which asks the epistemic state
+once the robots have stopped whether the goal actually came out, the observer's
+ignorance included.
+
 ## Reference scenario
 
 The target scenario is the survey domain of `eplansys`. It comprises three
@@ -140,7 +144,9 @@ different branch for each: `relay-dirty_relay_scout` against
 `relay-clean_relay_scout`, with the robot driven by RMF either way.
 
 `rmf:=false` leaves the fleet to another terminal, and `headless:=true` runs
-Gazebo without a window.
+Gazebo without a window. When the robots stop, `mission_check` puts the goal's
+three conjuncts to the epistemic state and reports on each; `check:=false`
+leaves it out.
 
 ## Building
 

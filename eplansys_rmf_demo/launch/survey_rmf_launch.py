@@ -19,6 +19,10 @@ The site survey over an Open-RMF fleet.
     ros2 launch eplansys_rmf_demo survey_rmf_launch.py site:=clean
     ros2 launch eplansys_rmf_demo survey_rmf_launch.py rmf:=false
 
+When the robots have stopped, `mission_check` asks the epistemic state whether
+the mission came out the way the goal asked, the observer's ignorance included.
+`check:=false` leaves it out.
+
 The mission, the EPDDL and the policy are `eplansys_demo`'s. What this file
 changes is the performers: instead of waiting out a duration, they submit RMF
 tasks and wait for the fleet to report them done.
@@ -140,10 +144,34 @@ def launch_setup(context, *args, **kwargs):
             'server_uri': f'ws://localhost:{WEBSOCKET_PORT}',
         }.items())
 
-    finish = RegisterEventHandler(
-        OnProcessExit(target_action=mission, on_exit=[EmitEvent(event=Shutdown())]))
+    # The third conjunct of the goal is a negative one, and `observer` is bound
+    # to no robot and never moves, so it is satisfied by everything that fails
+    # to happen. Asking the epistemic state afterwards is what tells a run that
+    # honoured the private channel apart from a run that simply did nothing.
+    #
+    # The window for asking is narrow: the executor has to be finished and the
+    # state node has to still be alive, which is between the mission exiting
+    # and the shutdown it used to emit directly.
+    check = Node(
+        package='eplansys_rmf_demo',
+        executable='mission_check',
+        name='mission_check',
+        output='screen')
 
-    return [fleet, plansys2, bridge, mission, finish]
+    checking = LaunchConfiguration('check').perform(context).lower() in ('true', '1')
+
+    staged = []
+    if checking:
+        staged.append(
+            RegisterEventHandler(OnProcessExit(target_action=mission, on_exit=[check])))
+
+    staged.append(
+        RegisterEventHandler(
+            OnProcessExit(
+                target_action=check if checking else mission,
+                on_exit=[EmitEvent(event=Shutdown())])))
+
+    return [fleet, plansys2, bridge, mission, *staged]
 
 
 def generate_launch_description():
@@ -154,6 +182,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'headless', default_value='false',
             description='Run gazebo headless and leave rviz out.'),
+        DeclareLaunchArgument(
+            'check', default_value='true',
+            description='Ask the epistemic state, once the robots have '
+                        'stopped, whether the goal actually came out.'),
         DeclareLaunchArgument(
             'rmf', default_value='true',
             description='Launch the rmf_demos office fleet too. false when it '

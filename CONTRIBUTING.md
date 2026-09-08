@@ -18,8 +18,8 @@ The `lint` job runs no build, so it is cheap to reproduce in full:
 
 ```
 source /opt/ros/humble/setup.bash
-ament_uncrustify eplansys_rmf_bridge eplansys_rmf_probe
-ament_copyright eplansys_rmf_bridge eplansys_rmf_probe
+ament_uncrustify eplansys_rmf_bridge eplansys_rmf_probe eplansys_rmf_demo
+ament_copyright eplansys_rmf_bridge eplansys_rmf_probe eplansys_rmf_demo
 ```
 
 `--reformat` fixes the first one in place. Both need the linters installed:
@@ -28,6 +28,9 @@ ament_copyright eplansys_rmf_bridge eplansys_rmf_probe
 sudo apt install ros-humble-ament-cmake-uncrustify \
                  ros-humble-ament-cmake-copyright
 ```
+
+`eplansys_rmf_demo` is linted but not built by CI: `mission_check` needs
+eplansys, which the image does not have.
 
 The `build and test` job is the ordinary build plus the unit tests and the
 websocket smoke test. The smoke test needs `install/setup.bash` sourced on top
@@ -46,5 +49,6 @@ source install/setup.bash
 `eplansys` is deliberately absent from the CI image. `eplansys_rmf_bridge`
 finds plansys2 with `QUIET` and builds its library either way, so CI exercises
 the whole RMF half -- the task map, the websocket, the submission path -- and
-none of the performers. Changes to the performers are covered by running the
-demo, not by a green tick.
+none of the performers. `eplansys_rmf_demo` guards `mission_check` the same
+way and installs the launch files without it. Changes to the performers and to
+`mission_check` are covered by running the demo, not by a green tick.

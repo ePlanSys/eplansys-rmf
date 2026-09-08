@@ -11,6 +11,11 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <build_depend>rclcpp</build_depend>
+  <exec_depend>rclcpp</exec_depend>
+  <build_depend>plansys2_epistemic_executor</build_depend>
+  <exec_depend>plansys2_epistemic_executor</exec_depend>
+
   <exec_depend>eplansys_rmf_bridge</exec_depend>
   <exec_depend>eplansys_demo</exec_depend>
   <exec_depend>plansys2_bringup</exec_depend>

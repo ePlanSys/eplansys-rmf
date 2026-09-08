@@ -75,14 +75,18 @@ jobs:
             ros-humble-ament-cmake-cpplint \
             ros-humble-ament-cmake-copyright
 
+      # eplansys_rmf_demo is linted too, though it is not built here: it holds
+      # mission_check, which needs eplansys and so cannot compile on this
+      # image. Style is checkable without a compiler, and an unlinted package
+      # is how a file drifts.
       - name: Uncrustify
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          ament_uncrustify eplansys_rmf_bridge eplansys_rmf_probe
+          ament_uncrustify eplansys_rmf_bridge eplansys_rmf_probe eplansys_rmf_demo
 
       - name: Copyright
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          ament_copyright eplansys_rmf_bridge eplansys_rmf_probe
+          ament_copyright eplansys_rmf_bridge eplansys_rmf_probe eplansys_rmf_demo

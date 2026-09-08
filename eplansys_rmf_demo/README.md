@@ -53,6 +53,42 @@ execution.underway("eplansys.outcome=e-scan-dirty")
 
 The bridge then reports what the fleet observed and ignores the default.
 
+## Checking that it came out
+
+The goal has three conjuncts, and the third is a negative one: the observer
+must not come to know whether the site is contaminated. A negative goal is
+satisfied by everything that fails to happen, and `observer` is bound to no
+robot and never moves, so the demo satisfies it whatever it does. A run that
+honoured the private channel and a run that achieved nothing look the same
+from the outside.
+
+`mission_check` asks instead. It runs once the mission process has exited and
+before the launch file shuts the system down, which is the only window in
+which the executor is finished and the epistemic state is still alive, and it
+puts each conjunct to `epistemic_state/check_formula`:
+
+```
+ok   (Kw scout contaminated) holds
+ok   (Kw relay contaminated) holds
+ok   (Kw observer contaminated) does not hold
+```
+
+The formulas are the `must_hold` and `must_not_hold` parameters, defaulting to
+the survey's three conjuncts, because the claims belong to the mission and not
+to the node. `check:=false` leaves the whole thing out.
+
+A call that is not answered is reported as `UNCHECKED` and counts as a
+failure, never as a false answer. The distinction is the point: an epistemic
+state that is unreachable would otherwise report that the observer knows
+nothing, which is the very result the demo exists to establish, and it would
+report it about a system nobody asked.
+
+Note what this does and does not settle. It establishes that the model ended
+where the goal wanted it, which is a statement about the epistemic state after
+execution. It is not evidence that the observer could not physically have
+learnt the finding: the speech acts are still `local` and submit no RMF task,
+so there is no channel for anything to leak through yet.
+
 ## Ports
 
 The bridge is the websocket server the fleet adapter dials, on 7879. The
