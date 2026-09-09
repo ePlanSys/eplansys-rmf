@@ -38,6 +38,7 @@
 
 #include "plansys2_executor/ActionExecutorClient.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 
 namespace eplansys_rmf_bridge
 {
@@ -52,7 +53,8 @@ public:
     std::shared_ptr<TaskMapping> mapping,
     std::shared_ptr<RmfTaskClient> client,
     std::shared_ptr<Announcer> announcer,
-    double timeout)
+    double timeout,
+    const std::string & observation_topic)
   : ActionExecutorClient(node_name),
     action_(action),
     spec_(std::move(spec)),
@@ -63,6 +65,24 @@ public:
   {
     set_parameter(rclcpp::Parameter("action_name", action));
     set_parameter(rclcpp::Parameter("rate", 4.0));
+
+    // Only a sensing action has anything to do with an observation, and
+    // subscribing from the others would let one action's reading answer for
+    // another's.
+    if (spec_.sensing && !observation_topic.empty()) {
+      rclcpp::QoS qos(1);
+      qos.reliable().transient_local();
+      observation_sub_ = create_subscription<std_msgs::msg::String>(
+        observation_topic, qos,
+        [this](const std_msgs::msg::String::SharedPtr msg) {
+          if (msg->data != observed_) {
+            RCLCPP_INFO(
+              get_logger(), "%s: observation available: %s",
+              action_.c_str(), msg->data.c_str());
+          }
+          observed_ = msg->data;
+        });
+    }
   }
 
 private:
@@ -333,6 +353,19 @@ private:
       return carried;
     }
 
+    // What a perception node reported while the action was running. This is
+    // second only to an outcome RMF carried itself, and ahead of the map:
+    // a value measured at the site is an observation, and a value read from
+    // the task map is a stand-in for one.
+    if (!observed_.empty()) {
+      RCLCPP_INFO(
+        get_logger(), "%s: perception reported %s",
+        action_.c_str(), observed_.c_str());
+      const auto sensed = observed_;
+      remember(sensed);
+      return sensed;
+    }
+
     const auto configured = mapping_->outcome_for(spec_, get_arguments());
 
     if (configured.empty()) {
@@ -346,8 +379,9 @@ private:
 
     RCLCPP_WARN(
       get_logger(),
-      "%s: RMF carried no outcome, falling back to the map's \"%s\". "
-      "A fleet adapter reporting what it sensed would override this.",
+      "%s: no outcome from RMF and none from perception, falling back to the "
+      "map's \"%s\". A fleet adapter or a perception node reporting what it "
+      "sensed would override this.",
       action_.c_str(), configured.c_str());
     remember(configured);
     return configured;
@@ -375,6 +409,8 @@ private:
   std::shared_ptr<RmfTaskClient> client_;
   std::shared_ptr<Announcer> announcer_;
   double timeout_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr observation_sub_;
+  std::string observed_;
 
   bool started_{false};
   rclcpp::Time begun_;
@@ -393,6 +429,7 @@ int main(int argc, char ** argv)
   config->declare_parameter("outcome_prefix", std::string{"eplansys.outcome="});
   config->declare_parameter("task_timeout", 120.0);
   config->declare_parameter("channel_prefix", std::string{"/eplansys/channel"});
+  config->declare_parameter("observation_topic", std::string{"/eplansys/observation"});
 
   const auto task_map = config->get_parameter("task_map").as_string();
   const auto port = static_cast<int>(
@@ -400,6 +437,8 @@ int main(int argc, char ** argv)
   const auto prefix = config->get_parameter("outcome_prefix").as_string();
   const auto timeout = config->get_parameter("task_timeout").as_double();
   const auto channel_prefix = config->get_parameter("channel_prefix").as_string();
+  const auto observation_topic =
+    config->get_parameter("observation_topic").as_string();
 
   if (task_map.empty()) {
     RCLCPP_FATAL(
@@ -433,7 +472,8 @@ int main(int argc, char ** argv)
     const auto spec = mapping->action(name);
     actions.push_back(
       std::make_shared<eplansys_rmf_bridge::RmfAction>(
-        name + "_rmf_node", name, *spec, mapping, client, announcer, timeout));
+        name + "_rmf_node", name, *spec, mapping, client, announcer, timeout,
+        observation_topic));
 
     std::string how = spec->local ? " (speech act, no RMF task)" : "";
     if (spec->channel == "public") {
