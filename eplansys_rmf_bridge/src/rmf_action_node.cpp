@@ -27,6 +27,7 @@
 // lifted back out here.
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -70,17 +71,39 @@ public:
     // subscribing from the others would let one action's reading answer for
     // another's.
     if (spec_.sensing && !observation_topic.empty()) {
-      rclcpp::QoS qos(1);
+      // Deep enough to hold one reading per place a sensing action can be
+      // sent. The topic is latched, and with a depth of one a late subscriber
+      // is handed only the most recent site's reading -- which for a domain
+      // with several sites is an arbitrary one of them.
+      rclcpp::QoS qos(16);
       qos.reliable().transient_local();
       observation_sub_ = create_subscription<std_msgs::msg::String>(
         observation_topic, qos,
         [this](const std_msgs::msg::String::SharedPtr msg) {
-          if (msg->data != observed_) {
+          // Two forms. "<place> <outcome>" is a reading of a named place, and
+          // is the one a domain with more than one site has to use. A bare
+          // "<outcome>" is a reading of wherever the fleet happens to be, and
+          // is what a single-site perception node publishes.
+          const auto & data = msg->data;
+          const auto space = data.find(' ');
+          if (space != std::string::npos) {
+            const auto place = data.substr(0, space);
+            const auto outcome = data.substr(space + 1);
+            if (observed_at_place_[place] != outcome) {
+              RCLCPP_INFO(
+                get_logger(), "%s: observation available at %s: %s",
+                action_.c_str(), place.c_str(), outcome.c_str());
+            }
+            observed_at_place_[place] = outcome;
+            return;
+          }
+          if (data != observed_) {
             RCLCPP_INFO(
               get_logger(), "%s: observation available: %s",
-              action_.c_str(), msg->data.c_str());
+              action_.c_str(), data.c_str());
           }
-          observed_ = msg->data;
+          observed_ = data;
+          observed_at_ = now();
         });
     }
   }
@@ -336,6 +359,26 @@ private:
       last_status.empty() ? "submitted" : last_status);
   }
 
+  /// The place this sensing action is about, in the vocabulary the perception
+  /// node publishes: the action's own argument, before the zones table turns
+  /// it into an RMF waypoint.
+  ///
+  /// `outcome_arg` first, because that is the argument the map already
+  /// declares as the one selecting what is found; `waypoint_arg` after it, so
+  /// an action that says where it goes but not what it finds still names a
+  /// place. An action with neither is a sensing action with one fixed site,
+  /// and there is nothing to match.
+  std::string observed_place() const
+  {
+    const auto & args = get_arguments();
+    for (const auto index : {spec_.outcome_arg, spec_.waypoint_arg}) {
+      if (index >= 0 && static_cast<std::size_t>(index) < args.size()) {
+        return args[index];
+      }
+    }
+    return {};
+  }
+
   /// An ordinary action reports nothing. A sensing action reports what the
   /// robot saw, and falls back to the configured answer when the fleet carried
   /// no token, saying so, because a fleet adapter that knows nothing of
@@ -353,17 +396,67 @@ private:
       return carried;
     }
 
-    // What a perception node reported while the action was running. This is
-    // second only to an outcome RMF carried itself, and ahead of the map:
-    // a value measured at the site is an observation, and a value read from
-    // the task map is a stand-in for one.
-    if (!observed_.empty()) {
+    // What a perception node reported for the place this action is about.
+    // This is second only to an outcome RMF carried itself, and ahead of the
+    // map: a value measured at the site is an observation, and a value read
+    // from the task map is a stand-in for one.
+    //
+    // Reading it by place, and not simply taking the latest, is what a domain
+    // with more than one site requires. There is one performer per action name
+    // and one observation topic, so every scan of every site runs through this
+    // node; the topic is latched, so the second scan is handed the first one's
+    // answer the moment it subscribes. The reading would be a genuine
+    // measurement, taken by the right sensor at the right place, and
+    // attributed to the wrong action -- the branch taken, the model updated,
+    // the goal checked, and the answer whatever some other site held.
+    //
+    // Timing cannot substitute for this. A robot commonly arrives at its site
+    // during the `goto` that precedes the scan, so the correct reading is
+    // already several seconds old when the scan begins, and a rule that
+    // accepted only readings newer than the action would throw away the right
+    // answer and fall through to the map.
+    const auto place = observed_place();
+    if (!place.empty()) {
+      const auto found = observed_at_place_.find(place);
+      if (found != observed_at_place_.end() && !found->second.empty()) {
+        RCLCPP_INFO(
+          get_logger(), "%s: perception reported %s at %s",
+          action_.c_str(), found->second.c_str(), place.c_str());
+        remember(found->second);
+        return found->second;
+      }
+      if (!observed_at_place_.empty()) {
+        std::string elsewhere;
+        for (const auto & [where, what] : observed_at_place_) {
+          elsewhere += (elsewhere.empty() ? "" : ", ") + where + "=" + what;
+        }
+        RCLCPP_WARN(
+          get_logger(),
+          "%s: nothing has been observed at %s. Readings are held for %s, and "
+          "none of them is a reading of this action's site.",
+          action_.c_str(), place.c_str(), elsewhere.c_str());
+      }
+    }
+
+    // A single-site perception node publishes a bare outcome with no place,
+    // and there is then nothing to match on but time.
+    if (!observed_.empty() && observed_at_ >= begun_) {
       RCLCPP_INFO(
         get_logger(), "%s: perception reported %s",
         action_.c_str(), observed_.c_str());
       const auto sensed = observed_;
       remember(sensed);
       return sensed;
+    }
+
+    if (!observed_.empty()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "%s: the only placeless observation available (%s) was published "
+        "%.1f s before this action began, so it is another action's reading "
+        "and is ignored.",
+        action_.c_str(), observed_.c_str(),
+        (begun_ - observed_at_).seconds());
     }
 
     const auto configured = mapping_->outcome_for(spec_, get_arguments());
@@ -410,7 +503,17 @@ private:
   std::shared_ptr<Announcer> announcer_;
   double timeout_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr observation_sub_;
+  /// What has been observed where. A sensing action reads the entry for its
+  /// own site, so two scans of two places cannot answer for each other however
+  /// they are ordered in time.
+  std::map<std::string, std::string> observed_at_place_;
+
+  /// A reading that named no place, from a perception node that watches one.
   std::string observed_;
+  /// When `observed_` arrived, so that an action can tell its own reading from
+  /// the one left behind by the scan before it. Initialised to the epoch, which
+  /// is before any action begins and so reads as "nothing observed yet".
+  rclcpp::Time observed_at_{0, 0, RCL_ROS_TIME};
 
   bool started_{false};
   rclcpp::Time begun_;
