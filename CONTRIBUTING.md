@@ -48,7 +48,9 @@ source install/setup.bash
 
 `eplansys` is deliberately absent from the CI image. `eplansys_rmf_bridge`
 finds plansys2 with `QUIET` and builds its library either way, so CI exercises
-the whole RMF half -- the task map, the websocket, the submission path -- and
-none of the performers. `eplansys_rmf_demo` guards `mission_check` the same
+the whole RMF half -- the task map, the websocket, the submission path, and
+which reading a sensing action reports -- and none of the performers. Logic a
+performer needs to get right belongs in the library for that reason: the
+performer should only log it and call `finish()`. `eplansys_rmf_demo` guards `mission_check` the same
 way and installs the launch files without it. Changes to the performers and to
 `mission_check` are covered by running the demo, not by a green tick.

@@ -25,6 +25,7 @@ find_package(Eigen3 REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/TaskMapping.cpp
+  src/Observations.cpp
   src/RmfTaskClient.cpp
   src/WebsocketFeed.cpp
   src/Announcer.cpp
@@ -65,6 +66,10 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_task_mapping test/test_task_mapping.cpp)
   target_link_libraries(test_task_mapping ${PROJECT_NAME})
+  # Which reading a sensing action reports. The rules live in the library, not
+  # the performer, so that CI -- which builds no performers -- checks them.
+  ament_add_gtest(test_observations test/test_observations.cpp)
+  target_link_libraries(test_observations ${PROJECT_NAME})
 endif()
 
 ament_export_include_directories(include)

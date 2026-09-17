@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "eplansys_rmf_bridge/Announcer.hpp"
+#include "eplansys_rmf_bridge/Observations.hpp"
 #include "eplansys_rmf_bridge/RmfTaskClient.hpp"
 #include "eplansys_rmf_bridge/TaskMapping.hpp"
 
@@ -80,30 +81,19 @@ public:
       observation_sub_ = create_subscription<std_msgs::msg::String>(
         observation_topic, qos,
         [this](const std_msgs::msg::String::SharedPtr msg) {
-          // Two forms. "<place> <outcome>" is a reading of a named place, and
-          // is the one a domain with more than one site has to use. A bare
-          // "<outcome>" is a reading of wherever the fleet happens to be, and
-          // is what a single-site perception node publishes.
-          const auto & data = msg->data;
-          const auto space = data.find(' ');
-          if (space != std::string::npos) {
-            const auto place = data.substr(0, space);
-            const auto outcome = data.substr(space + 1);
-            if (observed_at_place_[place] != outcome) {
-              RCLCPP_INFO(
-                get_logger(), "%s: observation available at %s: %s",
-                action_.c_str(), place.c_str(), outcome.c_str());
-            }
-            observed_at_place_[place] = outcome;
+          const auto reading = observations_.record(msg->data, now().nanoseconds());
+          if (!reading.changed) {
             return;
           }
-          if (data != observed_) {
+          if (reading.place.empty()) {
             RCLCPP_INFO(
               get_logger(), "%s: observation available: %s",
-              action_.c_str(), data.c_str());
+              action_.c_str(), reading.outcome.c_str());
+          } else {
+            RCLCPP_INFO(
+              get_logger(), "%s: observation available at %s: %s",
+              action_.c_str(), reading.place.c_str(), reading.outcome.c_str());
           }
-          observed_ = data;
-          observed_at_ = now();
         });
     }
   }
@@ -359,125 +349,75 @@ private:
       last_status.empty() ? "submitted" : last_status);
   }
 
-  /// The place this sensing action is about, in the vocabulary the perception
-  /// node publishes: the action's own argument, before the zones table turns
-  /// it into an RMF waypoint.
-  ///
-  /// `outcome_arg` first, because that is the argument the map already
-  /// declares as the one selecting what is found; `waypoint_arg` after it, so
-  /// an action that says where it goes but not what it finds still names a
-  /// place. An action with neither is a sensing action with one fixed site,
-  /// and there is nothing to match.
-  std::string observed_place() const
-  {
-    const auto & args = get_arguments();
-    for (const auto index : {spec_.outcome_arg, spec_.waypoint_arg}) {
-      if (index >= 0 && static_cast<std::size_t>(index) < args.size()) {
-        return args[index];
-      }
-    }
-    return {};
-  }
-
   /// An ordinary action reports nothing. A sensing action reports what the
-  /// robot saw, and falls back to the configured answer when the fleet carried
-  /// no token, saying so, because a fleet adapter that knows nothing of
-  /// ePlanSys writes none and a simulated robot has nothing to sense with.
+  /// robot saw, and falls back to the configured answer when neither the fleet
+  /// nor perception reported one, saying so, because a fleet adapter that
+  /// knows nothing of ePlanSys writes no token and a simulated robot has
+  /// nothing to sense with. Observations says why the order is what it is.
   std::string resolve_outcome(const std::string & carried)
   {
     if (!spec_.sensing) {
       return {};
     }
 
-    if (!carried.empty()) {
-      RCLCPP_INFO(
-        get_logger(), "%s: observed %s", action_.c_str(), carried.c_str());
-      remember(carried);
-      return carried;
-    }
+    const auto place = observed_place(spec_, get_arguments());
+    const auto resolved = observations_.resolve(
+      carried, place, begun_.nanoseconds(), mapping_->outcome_for(spec_, get_arguments()));
 
-    // What a perception node reported for the place this action is about.
-    // This is second only to an outcome RMF carried itself, and ahead of the
-    // map: a value measured at the site is an observation, and a value read
-    // from the task map is a stand-in for one.
-    //
-    // Reading it by place, and not simply taking the latest, is what a domain
-    // with more than one site requires. There is one performer per action name
-    // and one observation topic, so every scan of every site runs through this
-    // node; the topic is latched, so the second scan is handed the first one's
-    // answer the moment it subscribes. The reading would be a genuine
-    // measurement, taken by the right sensor at the right place, and
-    // attributed to the wrong action -- the branch taken, the model updated,
-    // the goal checked, and the answer whatever some other site held.
-    //
-    // Timing cannot substitute for this. A robot commonly arrives at its site
-    // during the `goto` that precedes the scan, so the correct reading is
-    // already several seconds old when the scan begins, and a rule that
-    // accepted only readings newer than the action would throw away the right
-    // answer and fall through to the map.
-    const auto place = observed_place();
-    if (!place.empty()) {
-      const auto found = observed_at_place_.find(place);
-      if (found != observed_at_place_.end() && !found->second.empty()) {
-        RCLCPP_INFO(
-          get_logger(), "%s: perception reported %s at %s",
-          action_.c_str(), found->second.c_str(), place.c_str());
-        remember(found->second);
-        return found->second;
+    if (!resolved.elsewhere.empty()) {
+      std::string held;
+      for (const auto & [where, what] : resolved.elsewhere) {
+        held += (held.empty() ? "" : ", ") + where + "=" + what;
       }
-      if (!observed_at_place_.empty()) {
-        std::string elsewhere;
-        for (const auto & [where, what] : observed_at_place_) {
-          elsewhere += (elsewhere.empty() ? "" : ", ") + where + "=" + what;
-        }
-        RCLCPP_WARN(
-          get_logger(),
-          "%s: nothing has been observed at %s. Readings are held for %s, and "
-          "none of them is a reading of this action's site.",
-          action_.c_str(), place.c_str(), elsewhere.c_str());
-      }
-    }
-
-    // A single-site perception node publishes a bare outcome with no place,
-    // and there is then nothing to match on but time.
-    if (!observed_.empty() && observed_at_ >= begun_) {
-      RCLCPP_INFO(
-        get_logger(), "%s: perception reported %s",
-        action_.c_str(), observed_.c_str());
-      const auto sensed = observed_;
-      remember(sensed);
-      return sensed;
-    }
-
-    if (!observed_.empty()) {
       RCLCPP_WARN(
         get_logger(),
-        "%s: the only placeless observation available (%s) was published "
-        "%.1f s before this action began, so it is another action's reading "
-        "and is ignored.",
-        action_.c_str(), observed_.c_str(),
-        (begun_ - observed_at_).seconds());
+        "%s: nothing has been observed at %s. Readings are held for %s, and "
+        "none of them is a reading of this action's site.",
+        action_.c_str(), place.c_str(), held.c_str());
     }
-
-    const auto configured = mapping_->outcome_for(spec_, get_arguments());
-
-    if (configured.empty()) {
-      RCLCPP_ERROR(
+    if (resolved.placeless_stale && resolved.source != OutcomeSource::Carried) {
+      RCLCPP_WARN(
         get_logger(),
-        "%s: sensing action carried no outcome, and the map names none for "
-        "these arguments. The policy has nothing to branch on.",
-        action_.c_str());
-      return {};
+        "%s: the only placeless observation available was published %.1f s "
+        "before this action began, so it is another action's reading and is "
+        "ignored.",
+        action_.c_str(), static_cast<double>(resolved.placeless_age_ns) / 1e9);
     }
 
-    RCLCPP_WARN(
-      get_logger(),
-      "%s: no outcome from RMF and none from perception, falling back to the "
-      "map's \"%s\". A fleet adapter or a perception node reporting what it "
-      "sensed would override this.",
-      action_.c_str(), configured.c_str());
-    remember(configured);
-    return configured;
+    switch (resolved.source) {
+      case OutcomeSource::Carried:
+        RCLCPP_INFO(
+          get_logger(), "%s: observed %s", action_.c_str(), resolved.outcome.c_str());
+        break;
+      case OutcomeSource::Place:
+        RCLCPP_INFO(
+          get_logger(), "%s: perception reported %s at %s",
+          action_.c_str(), resolved.outcome.c_str(), place.c_str());
+        break;
+      case OutcomeSource::Placeless:
+        RCLCPP_INFO(
+          get_logger(), "%s: perception reported %s",
+          action_.c_str(), resolved.outcome.c_str());
+        break;
+      case OutcomeSource::Map:
+        RCLCPP_WARN(
+          get_logger(),
+          "%s: no outcome from RMF and none from perception, falling back to the "
+          "map's \"%s\". A fleet adapter or a perception node reporting what it "
+          "sensed would override this.",
+          action_.c_str(), resolved.outcome.c_str());
+        break;
+      case OutcomeSource::Nothing:
+        RCLCPP_ERROR(
+          get_logger(),
+          "%s: sensing action carried no outcome, and the map names none for "
+          "these arguments. The policy has nothing to branch on.",
+          action_.c_str());
+        return {};
+    }
+
+    remember(resolved.outcome);
+    return resolved.outcome;
   }
 
   /// Keep what the acting agent sensed, so that a later speech act by the same
@@ -503,17 +443,7 @@ private:
   std::shared_ptr<Announcer> announcer_;
   double timeout_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr observation_sub_;
-  /// What has been observed where. A sensing action reads the entry for its
-  /// own site, so two scans of two places cannot answer for each other however
-  /// they are ordered in time.
-  std::map<std::string, std::string> observed_at_place_;
-
-  /// A reading that named no place, from a perception node that watches one.
-  std::string observed_;
-  /// When `observed_` arrived, so that an action can tell its own reading from
-  /// the one left behind by the scan before it. Initialised to the epoch, which
-  /// is before any action begins and so reads as "nothing observed yet".
-  rclcpp::Time observed_at_{0, 0, RCL_ROS_TIME};
+  Observations observations_;
 
   bool started_{false};
   rclcpp::Time begun_;
