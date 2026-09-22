@@ -5,7 +5,10 @@ Epistemic policies are dispatched as fleet-level RMF tasks, and the observations
 the robots make while executing them are returned to the epistemic state.
 
 Status: the survey mission runs end to end over the `rmf_demos` office fleet,
-in both of its branches.
+in both of its branches. CI drives the performers on every push, with a fake
+executor on one side and a fake fleet on the other, so what the mission claims
+is checked without Gazebo; see
+[`eplansys_rmf_bridge/test/integration`](eplansys_rmf_bridge/test/integration).
 
 ## Separation from the planning stack
 

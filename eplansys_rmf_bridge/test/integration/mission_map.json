@@ -1,0 +1,39 @@
+{
+  "zones": {
+    "a07": "pantry",
+    "a15": "lounge"
+  },
+
+  "agents": {
+    "scout": {"fleet": "tinyRobot", "robot": "tinyRobot1"},
+    "relay": {"fleet": "tinyRobot", "robot": "tinyRobot2"}
+  },
+
+  "actions": {
+    "goto_site": {
+      "category": "go_to_place",
+      "waypoint_arg": 1
+    },
+
+    "scan": {
+      "category": "go_to_place",
+      "waypoint_arg": 1,
+      "sensing": true,
+      "outcome_arg": 1,
+      "default_outcome": "e-scan-clean"
+    },
+
+    "relay": {
+      "local": true,
+      "duration": 0.5,
+      "channel": "private",
+      "listener_arg": 1
+    },
+
+    "broadcast": {
+      "local": true,
+      "duration": 0.5,
+      "channel": "public"
+    }
+  }
+}

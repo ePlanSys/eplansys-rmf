@@ -59,6 +59,96 @@ jobs:
           source install/setup.bash
           src/eplansys-rmf/.github/workflows/smoke_test.sh
 
+  # The performers, driven from both ends. They link plansys2_executor, which
+  # is why the job before this one cannot build them and why this one carries
+  # eplansys: a mission was checked by launching Gazebo and reading the
+  # console, and everything about that except the robots moving is testable
+  # without either.
+  mission:
+    name: mission end to end
+    runs-on: ubuntu-22.04
+    container: ros:humble-ros-base-jammy
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: src/eplansys-rmf
+
+      # Pinned to the release this bridge is tested against, the way eplansys
+      # pins Aletheia and plank. A moving branch would make a red tick here
+      # mean either "this repository broke" or "that one did".
+      - uses: actions/checkout@v5
+        with:
+          repository: ePlanSys/eplansys
+          ref: v0.2.0
+          path: src/eplansys
+
+      # rolling-devel, and not the branch named after this distribution:
+      # plansys2_executor links
+      # rclcpp_cascade_lifecycle::rclcpp_cascade_lifecycle, and humble-devel
+      # predates that target. What rolling-devel does carry that Humble cannot
+      # build is its tests, which construct an
+      # rclcpp::experimental::executors::EventsExecutor; they are left out
+      # below rather than the branch being changed for them.
+      - uses: actions/checkout@v5
+        with:
+          repository: fmrico/cascade_lifecycle
+          ref: rolling-devel
+          path: src/cascade_lifecycle
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ros-humble-rmf-dev \
+            ros-humble-behaviortree-cpp \
+            libwebsocketpp-dev \
+            libboost-system-dev \
+            nlohmann-json3-dev \
+            python3-colcon-common-extensions \
+            python3-rosdep
+
+      # ros-humble-behaviortree-cpp 4.9.1 installs its library as
+      # lib/x86_64-linux-gnu/libbehaviortree_cpp.so, while the exported-library
+      # check ament generates for it looks in lib/ alone, with NO_DEFAULT_PATH,
+      # so find_package fails and takes plansys2_executor with it. eplansys's
+      # own Humble job carries the same workaround. Remove once upstream
+      # restores the layout.
+      - name: Work around the behaviortree_cpp library layout
+        run: |
+          if [ -f /opt/ros/humble/lib/x86_64-linux-gnu/libbehaviortree_cpp.so ] && \
+             [ ! -e /opt/ros/humble/lib/libbehaviortree_cpp.so ]; then
+            ln -s x86_64-linux-gnu/libbehaviortree_cpp.so \
+                  /opt/ros/humble/lib/libbehaviortree_cpp.so
+          fi
+
+      - name: Resolve the rest with rosdep
+        shell: bash
+        run: |
+          rosdep update --rosdistro humble
+          rosdep install --from-paths src --ignore-src -y --rosdistro humble \
+            --skip-keys "popf plank aletheia rmf_traffic_editor_assets"
+
+      # --packages-up-to, so the planning stack is built as far as the
+      # performers need it and no further: the epistemic packages, their
+      # planner and its grounder are eplansys's own CI to run.
+      # BUILD_TESTING off: this job runs a mission rather than a test suite, and
+      # the tests it would otherwise build are the dependencies' own. One of
+      # them, cascade_lifecycle's, does not compile on Humble at all.
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --packages-up-to eplansys_rmf_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+
+      - name: Mission
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          src/eplansys-rmf/eplansys_rmf_bridge/test/integration/run.sh
+
   lint:
     name: lint
     runs-on: ubuntu-22.04
