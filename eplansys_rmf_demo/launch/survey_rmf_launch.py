@@ -130,7 +130,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{
             'task_map': map_file.name,
             'websocket_port': WEBSOCKET_PORT,
-            'task_timeout': 180.0,
+            'task_timeout': float(LaunchConfiguration('task_timeout').perform(context)),
             'channel_prefix': CHANNEL_PREFIX,
         }])
 
@@ -213,6 +213,11 @@ def generate_launch_description():
             'check', default_value='true',
             description='Ask the epistemic state, once the robots have '
                         'stopped, whether the goal actually came out.'),
+        DeclareLaunchArgument(
+            'task_timeout', default_value='180.0',
+            description='How long the bridge waits for a task it submitted '
+                        'before giving up on it. Shorten it to watch what a '
+                        'fleet that stops answering does to the mission.'),
         DeclareLaunchArgument(
             'rmf', default_value='true',
             description='Launch the rmf_demos office fleet too. false when it '
