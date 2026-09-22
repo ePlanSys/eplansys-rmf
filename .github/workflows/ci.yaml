@@ -83,6 +83,13 @@ jobs:
           ref: v0.2.0
           path: src/eplansys
 
+      # rolling-devel, and not the branch named after this distribution:
+      # plansys2_executor links
+      # rclcpp_cascade_lifecycle::rclcpp_cascade_lifecycle, and humble-devel
+      # predates that target. What rolling-devel does carry that Humble cannot
+      # build is its tests, which construct an
+      # rclcpp::experimental::executors::EventsExecutor; they are left out
+      # below rather than the branch being changed for them.
       - uses: actions/checkout@v5
         with:
           repository: fmrico/cascade_lifecycle
@@ -125,12 +132,15 @@ jobs:
       # --packages-up-to, so the planning stack is built as far as the
       # performers need it and no further: the epistemic packages, their
       # planner and its grounder are eplansys's own CI to run.
+      # BUILD_TESTING off: this job runs a mission rather than a test suite, and
+      # the tests it would otherwise build are the dependencies' own. One of
+      # them, cascade_lifecycle's, does not compile on Humble at all.
       - name: Build
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
           colcon build --packages-up-to eplansys_rmf_bridge \
-            --cmake-args -DCMAKE_BUILD_TYPE=Release
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 
       - name: Mission
         shell: bash
