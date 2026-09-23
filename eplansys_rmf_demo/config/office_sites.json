@@ -1,0 +1,56 @@
+{
+  "agents": {
+    "north": {
+      "fleet": "tinyRobot",
+      "robot": "tinyRobot1"
+    },
+    "south": {
+      "fleet": "tinyRobot",
+      "robot": "tinyRobot2"
+    }
+  },
+  "actions": {
+    "goto_north": {
+      "category": "go_to_place",
+      "waypoint": "pantry"
+    },
+    "goto_south": {
+      "category": "go_to_place",
+      "waypoint": "lounge"
+    },
+    "scan_north": {
+      "category": "go_to_place",
+      "waypoint": "pantry",
+      "sensing": true,
+      "default_outcome": "e-scan-north-dirty"
+    },
+    "scan_south": {
+      "category": "go_to_place",
+      "waypoint": "lounge",
+      "sensing": true,
+      "default_outcome": "e-scan-south-clean"
+    },
+    "relay_north": {
+      "local": true,
+      "duration": 2.0,
+      "channel": "private",
+      "listener_arg": 1
+    },
+    "relay_south": {
+      "local": true,
+      "duration": 2.0,
+      "channel": "private",
+      "listener_arg": 1
+    },
+    "broadcast_north": {
+      "local": true,
+      "duration": 2.0,
+      "channel": "public"
+    },
+    "broadcast_south": {
+      "local": true,
+      "duration": 2.0,
+      "channel": "public"
+    }
+  }
+}
