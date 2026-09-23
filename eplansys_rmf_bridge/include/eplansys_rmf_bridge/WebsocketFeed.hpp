@@ -63,6 +63,19 @@ public:
   /// Frames accepted so far, whether or not they parsed.
   std::size_t received() const;
 
+  /// Whether frames reach the callback.
+  ///
+  /// A fleet that stops answering is not the same thing as a fleet that has
+  /// stopped: the robots keep their positions, the adapter keeps its state,
+  /// and what is lost is the road back. Setting this false is that loss, and
+  /// nothing else --- the socket stays up, the frames are still counted, and
+  /// they are dropped instead of delivered. It exists so that an experiment
+  /// can interrupt the link without killing the thing at the other end of it,
+  /// which is the difference between measuring a recovery and measuring a
+  /// restart.
+  void deliver(bool yes);
+  bool delivering() const;
+
   class Implementation;
 
 private:

@@ -195,22 +195,26 @@ int main(int argc, char ** argv)
   });
 
   // The other half of the mission's claim, and the physical one: who was
-  // actually spoken to. `observer` is on no private channel, so its radio
-  // should have recorded nothing at all.
-  //
-  // `scout` is the one spoken to, which is worth reading twice. The planner
-  // sends the *relay* agent to the site and has it scan, and the speaker of a
-  // private announcement is its first argument: the solution is
-  // `relay-dirty_relay_scout`, so the agent named `relay` tells the agent
-  // named `scout`. The names describe the roles the mission was written
-  // around, not the roles the planner assigned.
-  node->declare_parameter("heard_something", std::vector<std::string>{"scout"});
+  // actually spoken to. Empty by default, because which agent is spoken to is
+  // the planner's choice and not the mission's: `relay-dirty_relay_scout` and
+  // `relay-dirty_scout_relay` both answer the survey's goal. A launch that
+  // knows which it wants says so.
+  node->declare_parameter("heard_something", std::vector<std::string>{});
+
+  // At least one of these was spoken to, and which one is not the mission's
+  // business. The survey needs the finding to reach the other member of the
+  // team over a channel the observer is not on, and either member can be the
+  // one that goes: `relay-dirty_relay_scout` and `relay-dirty_scout_relay`
+  // both answer the goal, and a replan from a different state can pick the
+  // other one. Naming a single listener would fail a mission that succeeded.
+  node->declare_parameter("heard_any", std::vector<std::string>{});
   node->declare_parameter("heard_nothing", std::vector<std::string>{"observer"});
   node->declare_parameter("channel_prefix", std::string{"/eplansys/channel"});
 
   const auto must_hold = node->get_parameter("must_hold").as_string_array();
   const auto must_not_hold = node->get_parameter("must_not_hold").as_string_array();
   const auto heard_something = node->get_parameter("heard_something").as_string_array();
+  const auto heard_any = node->get_parameter("heard_any").as_string_array();
   const auto heard_nothing = node->get_parameter("heard_nothing").as_string_array();
   auto prefix = node->get_parameter("channel_prefix").as_string();
   if (!prefix.empty() && prefix.back() == '/') {
@@ -218,7 +222,7 @@ int main(int argc, char ** argv)
   }
 
   if (must_hold.empty() && must_not_hold.empty() &&
-    heard_something.empty() && heard_nothing.empty())
+    heard_something.empty() && heard_any.empty() && heard_nothing.empty())
   {
     RCLCPP_WARN(node->get_logger(), "nothing to check");
     rclcpp::shutdown();
@@ -277,6 +281,7 @@ int main(int argc, char ** argv)
   // ended in the wrong model may still have used the right channel.
   std::vector<std::string> listeners;
   listeners.insert(listeners.end(), heard_something.begin(), heard_something.end());
+  listeners.insert(listeners.end(), heard_any.begin(), heard_any.end());
   listeners.insert(listeners.end(), heard_nothing.begin(), heard_nothing.end());
 
   std::size_t radios = 0;
@@ -301,6 +306,42 @@ int main(int argc, char ** argv)
         RCLCPP_INFO(
           node->get_logger(), "ok   %s was spoken to, %zu time(s)",
           agent.c_str(), transcript.utterances);
+      }
+    }
+
+    if (!heard_any.empty()) {
+      ++radios;
+      std::string spoken_to;
+      std::size_t silent = 0;
+      std::size_t missing = 0;
+
+      for (const auto & agent : heard_any) {
+        const auto & transcript = recorded.at(agent);
+        if (!transcript.arrived) {
+          ++missing;
+        } else if (transcript.utterances > 0) {
+          spoken_to += (spoken_to.empty() ? "" : ", ") + agent;
+        } else {
+          ++silent;
+        }
+      }
+
+      if (!spoken_to.empty()) {
+        RCLCPP_INFO(
+          node->get_logger(), "ok   somebody on the team was spoken to: %s",
+          spoken_to.c_str());
+      } else if (missing == heard_any.size()) {
+        ++failed;
+        RCLCPP_ERROR(
+          node->get_logger(),
+          "UNCHECKED somebody on the team was to have been spoken to: no "
+          "transcripts at all, so no radio was running");
+      } else {
+        ++failed;
+        RCLCPP_ERROR(
+          node->get_logger(),
+          "FAIL somebody on the team was to have been spoken to, and all %zu "
+          "heard nothing", silent);
       }
     }
 

@@ -115,11 +115,27 @@ public:
     return received_.load();
   }
 
+  void deliver(bool yes)
+  {
+    delivering_.store(yes);
+  }
+
+  bool delivering() const
+  {
+    return delivering_.load();
+  }
+
 private:
   void on_message(const std::string & payload)
   {
     received_.fetch_add(1);
     if (payload.empty()) {
+      return;
+    }
+
+    // Counted and then dropped: the link is down, and a frame that arrived
+    // over a link that is down is a frame that did not arrive.
+    if (!delivering_.load()) {
       return;
     }
 
@@ -146,6 +162,7 @@ private:
   std::set<websocketpp::connection_hdl,
     std::owner_less<websocketpp::connection_hdl>> connections_;
   std::atomic<std::size_t> received_{0};
+  std::atomic<bool> delivering_{true};
 };
 
 WebsocketFeed::WebsocketFeed(int port, Callback callback)
@@ -173,6 +190,16 @@ std::size_t WebsocketFeed::connections() const
 std::size_t WebsocketFeed::received() const
 {
   return impl_->received();
+}
+
+void WebsocketFeed::deliver(bool yes)
+{
+  impl_->deliver(yes);
+}
+
+bool WebsocketFeed::delivering() const
+{
+  return impl_->delivering();
 }
 
 }  // namespace eplansys_rmf_bridge

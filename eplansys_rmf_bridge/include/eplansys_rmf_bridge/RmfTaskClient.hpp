@@ -87,6 +87,18 @@ public:
 
   ~RmfTaskClient();
 
+  /// Whether the road back from the fleet is open.
+  ///
+  /// Closing it is what a link outage is: the adapter is alive, the robots are
+  /// where they were, the requests still go out, and what the fleet says about
+  /// them is dropped on arrival. A mission met with this has its action time
+  /// out and, if it replans, gets a fleet that is still there to answer the
+  /// next attempt --- which is the difference between recovering from an
+  /// outage and recovering from a restart, and only one of them is a thing a
+  /// deployment can expect to do.
+  void link(bool up);
+  bool linked() const;
+
   /// Submit a task pinned to one robot. Returns the request id, which is what
   /// status() takes: the RMF task id is not known until the response arrives.
   ///
