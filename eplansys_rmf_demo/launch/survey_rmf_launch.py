@@ -183,7 +183,17 @@ def launch_setup(context, *args, **kwargs):
         executable='mission_check',
         name='mission_check',
         output='screen',
-        parameters=[{'channel_prefix': CHANNEL_PREFIX}])
+        parameters=[{
+            'channel_prefix': CHANNEL_PREFIX,
+            # Which team member goes to the site and which is told is the
+            # planner's choice, and a replan from a different state can make
+            # the other one: both `relay-dirty_relay_scout` and
+            # `relay-dirty_scout_relay` answer this goal. What the mission
+            # claims is that the finding reached the team over a channel the
+            # observer was not on, and that is what is checked.
+            'heard_any': ['scout', 'relay'],
+            'heard_nothing': ['observer'],
+        }])
 
     checking = LaunchConfiguration('check').perform(context).lower() in ('true', '1')
 

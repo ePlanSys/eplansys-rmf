@@ -40,6 +40,7 @@
 
 #include "plansys2_executor/ActionExecutorClient.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 
 namespace eplansys_rmf_bridge
@@ -463,6 +464,10 @@ int main(int argc, char ** argv)
   config->declare_parameter("task_timeout", 120.0);
   config->declare_parameter("channel_prefix", std::string{"/eplansys/channel"});
   config->declare_parameter("observation_topic", std::string{"/eplansys/observation"});
+  // Where an experiment says the link went down. Publishing false drops what
+  // the fleet says from then on without touching the fleet; publishing true
+  // reads it again.
+  config->declare_parameter("link_topic", std::string{"/eplansys/rmf_link"});
 
   const auto task_map = config->get_parameter("task_map").as_string();
   const auto port = static_cast<int>(
@@ -492,6 +497,18 @@ int main(int argc, char ** argv)
 
   auto client = std::make_shared<eplansys_rmf_bridge::RmfTaskClient>(
     config, port, prefix);
+
+  // An outage is injected here and nowhere else. The subscription is latched
+  // so that a run which says "down" before this node is up still gets its
+  // outage, which is the ordinary shape of a scripted experiment.
+  const auto link_topic = config->get_parameter("link_topic").as_string();
+  auto link = config->create_subscription<std_msgs::msg::Bool>(
+    link_topic, rclcpp::QoS(1).transient_local(),
+    [client, config](const std_msgs::msg::Bool::SharedPtr message) {
+      client->link(message->data);
+    });
+  RCLCPP_INFO(
+    config->get_logger(), "an outage can be injected on %s", link_topic.c_str());
 
   // Shared, like the task client: what the scout sensed is what the scout's
   // later relay says, and those are two performers.

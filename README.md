@@ -134,6 +134,20 @@ because that is all that is left: `eplansys`'s action map sends `relay-dirty`
 and `relay-clean` alike to `(relay ?i ?j)`, so a performer cannot tell from its
 arguments which of the two it is saying.
 
+### 5. Interrupting the link
+
+A fleet that stops answering is not the same thing as a fleet that has stopped.
+Publishing `false` on `/eplansys/rmf_link` (the `link_topic` parameter) makes the
+bridge drop what arrives over the websocket from then on: the socket stays up,
+the frames are still counted, the requests still go out, and what is lost is the
+road back. `true` reads it again.
+
+It exists for experiments. A mission met with an outage has its action time out
+and, if it replans, finds a fleet that is still there to answer the next
+attempt. Killing the adapter instead measures something else: it comes back
+believing its robots are at their chargers, and the tasks it accepts afterwards
+never finish.
+
 ## Packages
 
 | package | contents |
