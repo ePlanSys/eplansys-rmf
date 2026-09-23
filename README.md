@@ -4,8 +4,9 @@ An Open-RMF execution interface for [ePlanSys](https://github.com/ePlanSys/eplan
 Epistemic policies are dispatched as fleet-level RMF tasks, and the observations
 the robots make while executing them are returned to the epistemic state.
 
-Status: the survey mission runs end to end over the `rmf_demos` office fleet,
-in both of its branches. CI drives the performers on every push, with a fake
+Status: the survey mission runs end to end over the `rmf_demos` office fleet, in
+both of its branches, and the two-site survey runs over it with both robots
+driving at once. CI drives the performers on every push, with a fake
 executor on one side and a fake fleet on the other, so what the mission claims
 is checked without Gazebo; see
 [`eplansys_rmf_bridge/test/integration`](eplansys_rmf_bridge/test/integration).
@@ -109,7 +110,10 @@ would mean the bridge could not look anything up.
 
 The bridge's map binds agents to robots and says where each action sends one,
 and for a speech act which audience it reaches.
-`eplansys_rmf_demo/config/office_survey.json` is the worked example.
+`eplansys_rmf_demo/config/office_survey.json` is the worked example, and
+`office_sites.json` is the two-site one: two agents bound to the two office
+robots, two sites at different waypoints, and the relay and the observer bound
+to nothing because neither ever moves.
 
 ### 4. Speech acts
 
@@ -135,7 +139,7 @@ arguments which of the two it is saying.
 | package | contents |
 | --- | --- |
 | `eplansys_rmf_bridge` | the `ActionExecutorClient` that submits RMF tasks |
-| `eplansys_rmf_demo` | the survey mission over an RMF fleet |
+| `eplansys_rmf_demo` | the survey missions over an RMF fleet, one site and two |
 | `eplansys_rmf_probe` | diagnostics: submit one task, and watch what returns |
 
 `eplansys_rmf_demo` also holds `radio`, one agent's ears on the speech-act
@@ -143,29 +147,50 @@ channels, and `mission_check`, which asks once the robots have stopped whether
 the goal actually came out --- of the epistemic state, and of the transcripts
 of who was spoken to.
 
-## Reference scenario
+## Reference scenarios
 
-The target scenario is the survey domain of `eplansys`. It comprises three
-robots and a site that may be contaminated, under a goal of three conjuncts.
-The scout is required to find out whether the site is contaminated, the relay is
-required to come to know the result, and an observer is required not to. The
-planner declines to broadcast and uses a private channel instead, since
-broadcasting would falsify the third conjunct.
+The first is the survey domain of `eplansys`: three robots and a site that may
+be contaminated, under a goal of three conjuncts. The scout is required to find
+out whether the site is contaminated, the relay is required to come to know the
+result, and an observer is required not to. The planner declines to broadcast
+and uses a private channel instead, since broadcasting would falsify the third
+conjunct. One robot moves.
 
-Executing this domain over an RMF fleet, with RMF driving the robots,
-constitutes the intended demonstration of the bridge.
+The second is the two-site survey: the same mission twice over, with each scout
+carrying the instrument its own site reads. Six conjuncts, three per site, and
+two halves that share no agent, no atom and no precondition. Both robots move,
+and where the policy's independent runs are dispatched together they move at the
+same time, which is where Open-RMF's traffic management is doing something the
+mission could not do for itself.
 
 ## Running it
 
 ```
 ros2 launch eplansys_rmf_demo survey_rmf_launch.py
 ros2 launch eplansys_rmf_demo survey_rmf_launch.py site:=clean
+
+ros2 launch eplansys_rmf_demo survey_sites_rmf_launch.py
+ros2 launch eplansys_rmf_demo survey_sites_rmf_launch.py north:=clean south:=dirty
+ros2 launch eplansys_rmf_demo survey_sites_rmf_launch.py parallel:=false
 ```
 
 One command brings up the office fleet, the planning system and the bridge.
 `site:` chooses what the scout turns out to find, and the policy takes a
 different branch for each: `relay-dirty_relay_scout` against
 `relay-clean_relay_scout`, with the robot driven by RMF either way.
+
+The two-site mission takes `north:` and `south:` for the same reason, one per
+site, and `parallel:` for how its policy is dispatched. Measured on the office
+fleet, north dirty and south clean:
+
+| dispatch | mission |
+| --- | --- |
+| a node at a time | 67.5 s |
+| independent runs together | 51.5 s |
+
+The saving is one drive across the office. With `parallel:=true` both `go_to_place`
+tasks are submitted in the same instant and RMF routes two robots at once; with
+it off the second waits for the first to arrive, scan and report.
 
 `rmf:=false` leaves the fleet to another terminal, and `headless:=true` runs
 Gazebo without a window. When the robots stop, `mission_check` puts the goal's
