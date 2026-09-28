@@ -195,6 +195,26 @@ bool RmfTaskClient::try_publish(const std::string & request_id)
   return true;
 }
 
+void RmfTaskClient::link(bool up)
+{
+  if (!feed_ || feed_->delivering() == up) {
+    return;
+  }
+
+  feed_->deliver(up);
+  RCLCPP_WARN(
+    node_->get_logger(),
+    up ?
+    "the link with the fleet is up again; what it says from here on is read" :
+    "the link with the fleet is down; the fleet is not, and what it says from "
+    "here on is dropped");
+}
+
+bool RmfTaskClient::linked() const
+{
+  return !feed_ || feed_->delivering();
+}
+
 void RmfTaskClient::flush_unpublished()
 {
   // Once a second, say what the websocket is actually carrying. Silence here
@@ -203,8 +223,9 @@ void RmfTaskClient::flush_unpublished()
   if (++flush_ticks_ % 40 == 0) {
     RCLCPP_INFO(
       node_->get_logger(),
-      "websocket: %zu connection(s), %zu frame(s) in, %zu task state(s) seen",
-      feed_->connections(), feed_->received(), task_to_request_.size());
+      "websocket: %zu connection(s), %zu frame(s) in, %zu task state(s) seen%s",
+      feed_->connections(), feed_->received(), task_to_request_.size(),
+      feed_->delivering() ? "" : " (link down: frames dropped on arrival)");
   }
 
   std::vector<std::string> waiting;
