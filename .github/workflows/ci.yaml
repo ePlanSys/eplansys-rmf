@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: ePlanSys/eplansys
-          ref: v0.2.0
+          ref: v0.3.0
           path: src/eplansys
 
       # rolling-devel, and not the branch named after this distribution:
